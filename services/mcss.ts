@@ -31,28 +31,75 @@ export class MCSSService {
     private async fetchApi(endpoint: string, options: RequestInit = {}) {
         const targetUrl = `${this.baseUrl}${endpoint}`;
 
+        // Detect Native (Capacitor) environment
+        const isNative = (window as any).Capacitor?.isNative ||
+            (window as any).Capacitor?.isNativePlatform?.() ||
+            window.location.protocol === 'static-rocket:' ||
+            window.location.protocol === 'capacitor:';
+
         try {
-            // Using Netlify Function as a Bridge
-            const response = await fetch('/.netlify/functions/mcss-proxy', {
-                method: options.method || 'GET',
-                headers: {
-                    'mcss-target-url': targetUrl,
-                    'mcss-api-key': this.apiKey,
-                    'Content-Type': 'application/json',
-                },
-                body: options.body,
-            });
+            if (isNative) {
+                // [NATIVE BYPASS] Use CapacitorHttp for absolute targetUrl
+                // This bypasses CORS and allows for more robust SSL handling
+                try {
+                    const { CapacitorHttp } = await import('@capacitor/core');
+                    const response = await CapacitorHttp.request({
+                        url: targetUrl,
+                        method: options.method || 'GET',
+                        headers: {
+                            'apiKey': this.apiKey,
+                            'Content-Type': 'application/json',
+                            'Accept': 'application/json',
+                        },
+                        data: options.body ? JSON.parse(options.body as string) : undefined,
+                        connectTimeout: 15000,
+                        readTimeout: 15000,
+                    });
 
-            if (!response.ok) {
-                const errorData = await response.json().catch(() => ({}));
-                throw new Error(errorData.error || `Proxy Error: ${response.status}`);
-            }
+                    if (response.status < 200 || response.status >= 300) {
+                        throw new Error(response.data?.error || `MCSS Error: ${response.status}`);
+                    }
 
-            const text = await response.text();
-            try {
+                    return response.data || {};
+                } catch (cHttpErr) {
+                    // Fallback to fetch if CapacitorHttp fails or isn't available
+                    const response = await fetch(targetUrl, {
+                        method: options.method || 'GET',
+                        headers: {
+                            'apiKey': this.apiKey,
+                            'Content-Type': 'application/json',
+                            'Accept': 'application/json',
+                        },
+                        body: options.body,
+                    });
+
+                    if (!response.ok) {
+                        const errorData = await response.json().catch(() => ({}));
+                        throw new Error(errorData.error || `MCSS Error: ${response.status}`);
+                    }
+
+                    const text = await response.text();
+                    return text ? JSON.parse(text) : {};
+                }
+            } else {
+                // [WEB PROXY] Use relative Netlify bridge
+                const response = await fetch('/.netlify/functions/mcss-proxy', {
+                    method: options.method || 'GET',
+                    headers: {
+                        'mcss-target-url': targetUrl,
+                        'mcss-api-key': this.apiKey,
+                        'Content-Type': 'application/json',
+                    },
+                    body: options.body,
+                });
+
+                if (!response.ok) {
+                    const errorData = await response.json().catch(() => ({}));
+                    throw new Error(errorData.error || `Proxy Error: ${response.status}`);
+                }
+
+                const text = await response.text();
                 return text ? JSON.parse(text) : {};
-            } catch (pErr) {
-                return {}; // Fallback for action responses that aren't valid JSON
             }
         } catch (err: any) {
             if (!SILENT_ERRORS) {

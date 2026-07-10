@@ -3,6 +3,7 @@ import React, { useState, useEffect } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useConfig } from '../contexts/ConfigContext';
 import { useAuth } from '../contexts/AuthContext';
+import { isMobilePhone } from '../utils/deviceDetection';
 
 const Navbar: React.FC = () => {
   const { config, notifications } = useConfig();
@@ -98,6 +99,7 @@ const Navbar: React.FC = () => {
     { name: 'Modpack', path: '/modpack' },
     { name: 'Utilities', path: '/utilities' },
     { name: 'Updates', path: '/updates' },
+    ...(config?.isBlogEnabled && !isMobilePhone() ? [{ name: 'Blog', path: '/blog' }] : []),
     { name: 'Dashboard', path: '/dashboard' },
     { name: 'Info', path: '/info' },
   ];
@@ -158,7 +160,7 @@ const Navbar: React.FC = () => {
                 <img src="/site-icon-rack-white.svg" alt="Server Manfredonia Logo" className="w-full h-full object-contain drop-shadow-[0_0_15px_rgba(255,255,255,0.3)]" />
               </div>
               <div className="flex flex-col">
-                <h1 className="font-bold text-lg md:text-xl tracking-tight leading-none text-white uppercase group-hover:text-shadow-glow transition-all whitespace-nowrap">Server Manfredonia</h1>
+                <h1 className="font-bold text-sm md:text-xl lg:text-sm xl:text-lg tracking-tight leading-none text-white uppercase group-hover:text-shadow-glow transition-all whitespace-nowrap">Server Manfredonia</h1>
                 <span className="text-[10px] text-gray-400 font-medium tracking-[0.2em] uppercase group-hover:text-white transition-colors hidden xl:block">Community Hub</span>
               </div>
             </Link>
@@ -169,7 +171,7 @@ const Navbar: React.FC = () => {
                 <Link
                   key={link.path}
                   to={link.path}
-                  className={`relative px-3 py-2 rounded-full text-xs font-bold uppercase tracking-widest transition-all duration-300 whitespace-nowrap ${isActive(link.path)
+                  className={`relative px-2 xl:px-2.5 py-1.5 rounded-full text-[9px] xl:text-xs font-bold uppercase tracking-wide xl:tracking-wider transition-all duration-300 whitespace-nowrap ${isActive(link.path)
                     ? 'text-black bg-white shadow-[0_0_15px_rgba(255,255,255,0.4)]'
                     : 'text-gray-400 hover:text-white hover:bg-white/5'
                     }`}
@@ -322,7 +324,7 @@ const Navbar: React.FC = () => {
 
               <button
                 onClick={copyIp}
-                className="hidden sm:flex items-center gap-3 h-10 px-5 rounded-xl bg-white/5 border border-white/10 hover:bg-white/10 hover:border-white/30 transition-all group cursor-pointer relative overflow-hidden"
+                className="hidden sm:flex lg:hidden xl:flex items-center gap-3 h-10 px-5 rounded-xl bg-white/5 border border-white/10 hover:bg-white/10 hover:border-white/30 transition-all group cursor-pointer relative overflow-hidden"
               >
                 <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/5 to-transparent -translate-x-full group-hover:animate-shimmer"></div>
                 <span className="material-symbols-outlined text-[18px] text-gray-400 group-hover:text-white transition-colors">content_copy</span>

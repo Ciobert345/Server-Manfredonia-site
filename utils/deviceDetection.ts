@@ -1,3 +1,20 @@
+import { Capacitor } from '@capacitor/core';
+
+// Capacitor global check
+declare global {
+    interface Window {
+        Capacitor?: any;
+    }
+}
+
+export const isNativeApp = (): boolean => {
+    return Capacitor.isNativePlatform();
+};
+
+export const isAndroidApp = (): boolean => {
+    return isNativeApp() && Capacitor.getPlatform() === 'android';
+};
+
 export const isMobilePhone = (): boolean => {
     if (typeof window === 'undefined') return false;
 
@@ -10,14 +27,19 @@ export const isMobilePhone = (): boolean => {
 };
 
 export const shouldRedirectToMobile = (): boolean => {
-    // Check if already on mobile route
-    if (window.location.hash.includes('/mobile')) return false;
+    // Check if already on mobile or app route
+    if (window.location.hash.includes('/mobile') || window.location.hash.includes('/app')) return false;
 
     // Check localStorage to respect user preference
     const preference = localStorage.getItem('viewMode');
     if (preference === 'desktop') return false;
 
-    return isMobilePhone();
+    return isMobilePhone() || isNativeApp();
+};
+
+// Reset function to clear desktop preference
+export const resetViewMode = (): void => {
+    localStorage.removeItem('viewMode');
 };
 
 export const switchToDesktop = (): void => {

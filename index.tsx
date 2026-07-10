@@ -4,6 +4,7 @@ import './index.css';
 import App from './App';
 import { ConfigProvider } from './contexts/ConfigContext';
 import { AuthProvider } from './contexts/AuthContext';
+import { ModalProvider } from './contexts/ModalContext';
 
 const rootElement = document.getElementById('root');
 if (!rootElement) {
@@ -15,7 +16,9 @@ root.render(
   <React.StrictMode>
     <ConfigProvider>
       <AuthProvider>
-        <App />
+        <ModalProvider>
+          <App />
+        </ModalProvider>
       </AuthProvider>
     </ConfigProvider>
   </React.StrictMode>

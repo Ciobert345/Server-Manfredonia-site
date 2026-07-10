@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useConfig } from '../contexts/ConfigContext';
+import { useModal } from '../contexts/ModalContext';
 import { supabase } from '../services/supabase';
 import { motion, AnimatePresence } from 'framer-motion';
 
@@ -60,10 +61,11 @@ interface AdminRoadmapItem {
 
 const Admin: React.FC = () => {
     const { user, loading: authLoading } = useAuth();
+    const { setModalOpen } = useModal();
     const navigate = useNavigate();
 
-    // Tabs: 'system' | 'users' | 'intel' | 'comms' | 'roadmap' | 'settings'
-    const [activeTab, setActiveTab] = useState<'system' | 'users' | 'intel' | 'comms' | 'roadmap' | 'settings'>('system');
+    // Tabs: 'system' | 'users' | 'intel' | 'comms' | 'roadmap' | 'settings' | 'blog'
+    const [activeTab, setActiveTab] = useState<'system' | 'users' | 'intel' | 'comms' | 'roadmap' | 'settings' | 'blog'>('system');
 
     // Data States
     const { config, isDashboardGloballyEnabled, updateDashboardStatus, updateGlobalConfig, updateMcssMasterKey } = useConfig();
@@ -84,6 +86,13 @@ const Admin: React.FC = () => {
     const [editingRoadmap, setEditingRoadmap] = useState<Partial<AdminRoadmapItem> | null>(null);
     const [roadmapModalOpen, setRoadmapModalOpen] = useState(false);
     const [draggedItem, setDraggedItem] = useState<any | null>(null);
+
+    // Blog States
+    const [blogPosts, setBlogPosts] = useState<any[]>([]);
+    const [editingBlogPost, setEditingBlogPost] = useState<any | null>(null);
+    const [blogModalOpen, setBlogModalOpen] = useState(false);
+    const [blogTagInput, setBlogTagInput] = useState('');
+    const [blogPreviewMode, setBlogPreviewMode] = useState(false);
 
     // Security Gate
     useEffect(() => {
@@ -126,6 +135,14 @@ const Admin: React.FC = () => {
                 const { data: roadData, error: roadError } = await supabase.from('roadmap_items').select('*').order('created_at', { ascending: true });
                 if (roadError) throw roadError;
                 setRoadmapItems(roadData || []);
+
+                // Fetch Blog Posts
+                const { data: blogData, error: blogError } = await supabase
+                    .from('blog_posts')
+                    .select('*, author:profiles!author_id(username)')
+                    .order('created_at', { ascending: false });
+                if (blogError) throw blogError;
+                setBlogPosts((blogData || []).map((p: any) => ({ ...p, author_username: p.author?.username || 'Admin' })));
 
             } catch (err: any) {
                 console.error('Admin fetch error:', err);
@@ -271,6 +288,7 @@ const Admin: React.FC = () => {
                 showStatus('success', 'Nuovo asset Intel creato');
             }
             setIntelModalOpen(false);
+            setModalOpen(false);
             setEditingIntel(null);
         } catch (err: any) {
             console.error('Intel Save Error Detail:', err);
@@ -324,6 +342,7 @@ const Admin: React.FC = () => {
                 showStatus('success', 'Nuova notifica creata');
             }
             setNotificationModalOpen(false);
+            setModalOpen(false);
             setEditingNotification(null);
         } catch (err: any) {
             showStatus('error', err.message);
@@ -392,6 +411,7 @@ const Admin: React.FC = () => {
                 showStatus('success', 'Nuovo task aggiunto');
             }
             setRoadmapModalOpen(false);
+            setModalOpen(false);
             setEditingRoadmap(null);
         } catch (err: any) {
             showStatus('error', err.message);
@@ -405,6 +425,88 @@ const Admin: React.FC = () => {
             if (error) throw error;
             setRoadmapItems(prev => prev.filter(r => r.id !== id));
             showStatus('success', 'Task eliminato');
+        } catch (err: any) {
+            showStatus('error', err.message);
+        }
+    };
+
+    // BLOG HANDLERS
+    const saveBlogPost = async (e: React.FormEvent) => {
+        e.preventDefault();
+        if (!editingBlogPost) return;
+
+        try {
+            const payload = {
+                author_id: editingBlogPost.author_id || user?.id,
+                title: editingBlogPost.title,
+                slug: editingBlogPost.slug || editingBlogPost.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)+/g, ''),
+                excerpt: editingBlogPost.excerpt || '',
+                content: editingBlogPost.content || '',
+                cover_image_url: editingBlogPost.cover_image_url || '',
+                status: editingBlogPost.status || 'draft',
+                is_featured: editingBlogPost.is_featured ?? false,
+                required_clearance_level: editingBlogPost.required_clearance_level ?? 0,
+                tags: editingBlogPost.tags || [],
+                published_at: editingBlogPost.status === 'published' ? (editingBlogPost.published_at || new Date().toISOString()) : null
+            };
+
+            if (editingBlogPost.id) {
+                const { error } = await supabase.from('blog_posts').update(payload).eq('id', editingBlogPost.id);
+                if (error) throw error;
+                setBlogPosts(prev => prev.map(p => p.id === editingBlogPost.id ? { ...p, ...payload } : p));
+                showStatus('success', 'Articolo del blog aggiornato');
+            } else {
+                const { data, error } = await supabase.from('blog_posts').insert([payload]).select();
+                if (error) throw error;
+                if (data) {
+                    const fullNewPost = { ...data[0], author_username: user?.username || 'Admin' };
+                    setBlogPosts(prev => [fullNewPost, ...prev]);
+                }
+                showStatus('success', 'Nuovo articolo del blog creato');
+            }
+            setBlogModalOpen(false);
+            setModalOpen(false);
+            setEditingBlogPost(null);
+            setBlogPreviewMode(false);
+        } catch (err: any) {
+            showStatus('error', err.message);
+        }
+    };
+
+    const deleteBlogPost = async (id: string) => {
+        if (!confirm('Eliminare permanentemente questo articolo dal blog?')) return;
+        try {
+            const { error } = await supabase.from('blog_posts').delete().eq('id', id);
+            if (error) throw error;
+            setBlogPosts(prev => prev.filter(p => p.id !== id));
+            showStatus('success', 'Articolo eliminato');
+        } catch (err: any) {
+            showStatus('error', err.message);
+        }
+    };
+
+    const duplicateBlogPost = async (post: any) => {
+        try {
+            const payload = {
+                author_id: user?.id,
+                title: `${post.title} (Copia)`,
+                slug: `${post.slug}-copy-${Date.now()}`,
+                excerpt: post.excerpt || '',
+                content: post.content || '',
+                cover_image_url: post.cover_image_url || '',
+                status: 'draft',
+                is_featured: false,
+                required_clearance_level: post.required_clearance_level ?? 0,
+                tags: post.tags || []
+            };
+
+            const { data, error } = await supabase.from('blog_posts').insert([payload]).select();
+            if (error) throw error;
+            if (data) {
+                const fullNewPost = { ...data[0], author_username: user?.username || 'Admin' };
+                setBlogPosts(prev => [fullNewPost, ...prev]);
+            }
+            showStatus('success', 'Articolo duplicato come bozza');
         } catch (err: any) {
             showStatus('error', err.message);
         }
@@ -476,6 +578,7 @@ const Admin: React.FC = () => {
                                     { id: 'intel', label: 'Intel', icon: 'topic', desc: 'Tactical assets' },
                                     { id: 'comms', label: 'Comms', icon: 'campaign', desc: 'Uplink signals' },
                                     { id: 'roadmap', label: 'Roadmap', icon: 'reorder', desc: 'Project trajectory' },
+                                    { id: 'blog', label: 'Blog', icon: 'article', desc: 'Content publishing' },
                                     { id: 'settings', label: 'Settings', icon: 'tune', desc: 'Module config' }
                                 ].map(tab => (
                                     <button
@@ -1038,7 +1141,7 @@ const Admin: React.FC = () => {
                                         <div className="flex items-center justify-between px-2">
                                             <span className="text-[10px] font-mono text-white/40 uppercase tracking-widest">{intel.length} Encrypted Assets</span>
                                             <button
-                                                onClick={() => { setEditingIntel({ name: '', description: '', image_url: '', unlock_code: '', required_clearance: 1 }); setIntelModalOpen(true); }}
+                                                onClick={() => { setEditingIntel({ name: '', description: '', image_url: '', unlock_code: '', required_clearance: 1 }); setIntelModalOpen(true); setModalOpen(true); }}
                                                 className="px-6 py-2.5 rounded-xl bg-emerald-500 text-black text-[10px] font-black uppercase tracking-[0.2em] hover:shadow-[0_0_30px_rgba(16,185,129,0.4)] active:scale-95 transition-all flex items-center gap-2"
                                             >
                                                 <span className="material-symbols-outlined text-lg">add</span>
@@ -1065,7 +1168,7 @@ const Admin: React.FC = () => {
                                                         <p className="text-xs text-white/40 line-clamp-2 leading-relaxed h-10">{item.description}</p>
                                                         <div className="flex items-center gap-2 mt-auto pt-4 border-t border-white/5">
                                                             <button
-                                                                onClick={() => { setEditingIntel(item); setIntelModalOpen(true); }}
+                                                                onClick={() => { setEditingIntel(item); setIntelModalOpen(true); setModalOpen(true); }}
                                                                 className="flex-1 h-10 rounded-xl bg-white/5 hover:bg-white/10 text-[9px] font-black uppercase tracking-widest text-white/60 hover:text-white transition-all border border-white/5"
                                                             >Edit</button>
                                                             <button
@@ -1094,7 +1197,7 @@ const Admin: React.FC = () => {
                                         <div className="flex items-center justify-between px-2">
                                             <span className="text-[10px] font-mono text-white/40 uppercase tracking-widest">{notifications.length} Active Banners</span>
                                             <button
-                                                onClick={() => { setEditingNotification({ title: '', subtitle: '', message: '', icon: 'notification', style: 'banner-blue', enabled: true }); setNotificationModalOpen(true); }}
+                                                onClick={() => { setEditingNotification({ title: '', subtitle: '', message: '', icon: 'notification', style: 'banner-blue', enabled: true }); setNotificationModalOpen(true); setModalOpen(true); }}
                                                 className="px-6 py-2.5 rounded-xl bg-blue-500 text-white text-[10px] font-black uppercase tracking-[0.2em] hover:shadow-[0_0_30px_rgba(59,130,246,0.4)] active:scale-95 transition-all flex items-center gap-2"
                                             >
                                                 <span className="material-symbols-outlined text-lg">add</span>
@@ -1148,7 +1251,7 @@ const Admin: React.FC = () => {
                                                                 >
                                                                     {note.enabled ? 'Enabled' : 'Disabled'}
                                                                 </button>
-                                                                <button onClick={() => { setEditingNotification(note); setNotificationModalOpen(true); }} className="size-10 rounded-xl bg-white/5 border border-white/10 flex items-center justify-center text-white/40 hover:text-white transition-all"><span className="material-symbols-outlined">edit</span></button>
+                                                                <button onClick={() => { setEditingNotification(note); setNotificationModalOpen(true); setModalOpen(true); }} className="size-10 rounded-xl bg-white/5 border border-white/10 flex items-center justify-center text-white/40 hover:text-white transition-all"><span className="material-symbols-outlined">edit</span></button>
                                                                 <button onClick={() => deleteNotification(note.id)} className="size-10 rounded-xl bg-red-500/5 border border-red-500/10 flex items-center justify-center text-red-400 hover:bg-red-500/20 transition-all"><span className="material-symbols-outlined">delete</span></button>
                                                             </div>
                                                         </div>
@@ -1172,7 +1275,7 @@ const Admin: React.FC = () => {
                                         <div className="flex items-center justify-between px-2">
                                             <span className="text-[10px] font-mono text-white/40 uppercase tracking-widest">{roadmapItems.length} Roadmap Objectives</span>
                                             <button
-                                                onClick={() => { setEditingRoadmap({ title: '', description: '', type: 'nextup', priority: 'Medium', column: 'backlog', progress: 0 }); setRoadmapModalOpen(true); }}
+                                                onClick={() => { setEditingRoadmap({ title: '', description: '', type: 'nextup', priority: 'Medium', column: 'backlog', progress: 0 }); setRoadmapModalOpen(true); setModalOpen(true); }}
                                                 className="px-6 py-2.5 rounded-xl bg-purple-500 text-white text-[10px] font-black uppercase tracking-[0.2em] hover:shadow-[0_0_30px_rgba(168,85,247,0.4)] active:scale-95 transition-all flex items-center gap-2"
                                             >
                                                 <span className="material-symbols-outlined text-lg">add</span>
@@ -1228,7 +1331,7 @@ const Admin: React.FC = () => {
                                                                     <div className="flex justify-between items-start">
                                                                         <h4 className="font-bold text-xs text-white leading-tight pointer-events-none">{item.title}</h4>
                                                                         <div className="flex gap-1" onMouseDown={e => e.stopPropagation()}>
-                                                                            <button onClick={() => { setEditingRoadmap(item); setRoadmapModalOpen(true); }} className="p-1 hover:text-white text-white/20 transition-colors cursor-pointer"><span className="material-symbols-outlined text-[14px]">edit</span></button>
+                                                                            <button onClick={() => { setEditingRoadmap(item); setRoadmapModalOpen(true); setModalOpen(true); }} className="p-1 hover:text-white text-white/20 transition-colors cursor-pointer"><span className="material-symbols-outlined text-[14px]">edit</span></button>
                                                                             <button onClick={() => deleteRoadmapItem(item.id)} className="p-1 hover:text-red-400 text-white/20 transition-colors cursor-pointer"><span className="material-symbols-outlined text-[14px]">delete</span></button>
                                                                         </div>
                                                                     </div>
@@ -1256,6 +1359,113 @@ const Admin: React.FC = () => {
                                                     </div>
                                                 );
                                             })}
+                                        </div>
+                                    </motion.div>
+                                )}
+
+                                {/* BLOG TAB */}
+                                {activeTab === 'blog' && (
+                                    <motion.div
+                                        key="blog"
+                                        initial={{ opacity: 0, y: 10 }}
+                                        animate={{ opacity: 1, y: 0 }}
+                                        exit={{ opacity: 0, y: -10 }}
+                                        className="flex flex-col gap-6"
+                                    >
+                                        <div className="flex items-center justify-between px-2">
+                                            <span className="text-[10px] font-mono text-white/40 uppercase tracking-widest">{blogPosts.length} Blog Articles</span>
+                                            <button
+                                                onClick={() => {
+                                                    setEditingBlogPost({
+                                                        title: '',
+                                                        slug: '',
+                                                        excerpt: '',
+                                                        content: '',
+                                                        cover_image_url: '',
+                                                        status: 'draft',
+                                                        is_featured: false,
+                                                        required_clearance_level: 0,
+                                                        tags: []
+                                                    });
+                                                    setBlogTagInput('');
+                                                    setBlogModalOpen(true);
+                                                    setModalOpen(true);
+                                                    setBlogPreviewMode(false);
+                                                }}
+                                                className="px-6 py-2.5 rounded-xl bg-emerald-500 text-white text-[10px] font-black uppercase tracking-[0.2em] hover:shadow-[0_0_30px_rgba(16,185,129,0.4)] active:scale-95 transition-all flex items-center gap-2"
+                                            >
+                                                <span className="material-symbols-outlined text-lg">add</span>
+                                                New Article
+                                            </button>
+                                        </div>
+
+                                        <div className="grid grid-cols-1 gap-4">
+                                            {blogPosts.length === 0 ? (
+                                                <div className="p-12 text-center border border-dashed border-white/5 rounded-3xl bg-white/[0.01]">
+                                                    <p className="text-sm text-white/20 italic">No blog posts created yet.</p>
+                                                </div>
+                                            ) : (
+                                                blogPosts.map(post => (
+                                                    <div key={post.id} className="glass-card p-6 rounded-2xl border border-white/5 bg-white/[0.01] flex flex-col md:flex-row md:items-center justify-between gap-4 group">
+                                                        <div className="flex items-center gap-4 min-w-0">
+                                                            {post.cover_image_url ? (
+                                                                <img src={post.cover_image_url} alt="" className="size-16 rounded-xl object-cover shrink-0 border border-white/10" />
+                                                            ) : (
+                                                                <div className="size-16 rounded-xl bg-white/5 flex items-center justify-center shrink-0 border border-white/10 text-white/20">
+                                                                    <span className="material-symbols-outlined">article</span>
+                                                                </div>
+                                                            )}
+                                                            <div className="flex flex-col gap-1 min-w-0">
+                                                                <div className="flex flex-wrap items-center gap-2">
+                                                                    <h4 className="font-black uppercase tracking-tight text-white text-sm truncate">{post.title}</h4>
+                                                                    <span className={`text-[8px] font-black uppercase tracking-widest px-1.5 py-0.5 rounded ${post.status === 'published' ? 'bg-emerald-500/10 border border-emerald-500/20 text-emerald-400' : 'bg-white/5 border border-white/10 text-white/30'}`}>
+                                                                        {post.status}
+                                                                    </span>
+                                                                    {post.is_featured && (
+                                                                        <span className="text-[8px] font-black uppercase tracking-widest px-1.5 py-0.5 rounded bg-amber-500/10 border border-amber-500/20 text-amber-400">
+                                                                            Featured
+                                                                        </span>
+                                                                    )}
+                                                                    {post.required_clearance_level > 0 && (
+                                                                        <span className="text-[8px] font-black uppercase tracking-widest px-1.5 py-0.5 rounded bg-purple-500/10 border border-purple-500/20 text-purple-400">
+                                                                            LVL {post.required_clearance_level} Clearance
+                                                                        </span>
+                                                                    )}
+                                                                </div>
+                                                                <p className="text-[10px] text-white/40 font-mono truncate">/{post.slug}</p>
+                                                                <p className="text-[10px] text-white/30">By {post.author_username || 'Admin'} • {post.tags?.join(', ') || 'No tags'}</p>
+                                                            </div>
+                                                        </div>
+                                                        <div className="flex items-center gap-2 shrink-0">
+                                                            <button
+                                                                onClick={() => duplicateBlogPost(post)}
+                                                                className="size-10 rounded-xl bg-white/5 border border-white/10 flex items-center justify-center text-white/40 hover:text-white transition-all cursor-pointer"
+                                                                title="Duplicate as draft"
+                                                            >
+                                                                <span className="material-symbols-outlined text-lg">content_copy</span>
+                                                            </button>
+                                                            <button
+                                                                onClick={() => {
+                                                                    setEditingBlogPost(post);
+                                                                    setBlogTagInput('');
+                                                                    setBlogModalOpen(true);
+                                                                    setModalOpen(true);
+                                                                    setBlogPreviewMode(false);
+                                                                }}
+                                                                className="size-10 rounded-xl bg-white/5 border border-white/10 flex items-center justify-center text-white/40 hover:text-white transition-all cursor-pointer"
+                                                            >
+                                                                <span className="material-symbols-outlined text-lg">edit</span>
+                                                            </button>
+                                                            <button
+                                                                onClick={() => deleteBlogPost(post.id)}
+                                                                className="size-10 rounded-xl bg-red-500/5 border border-red-500/10 flex items-center justify-center text-red-400 hover:bg-red-500/20 transition-all cursor-pointer"
+                                                            >
+                                                                <span className="material-symbols-outlined text-lg">delete</span>
+                                                            </button>
+                                                        </div>
+                                                    </div>
+                                                ))
+                                            )}
                                         </div>
                                     </motion.div>
                                 )}
@@ -1565,6 +1775,59 @@ const Admin: React.FC = () => {
                                                     [!IMPORTANT] I cambi qui influiranno sulle future assegnazioni. Gli utenti esistenti devono essere risincronizzati (cambiando il loro stato).
                                                 </p>
                                             </div>
+
+                                            {/* BLOG CONFIGURATION SETTINGS */}
+                                            <div className="glass-card p-8 rounded-3xl border border-white/10 bg-white/[0.02] flex flex-col gap-8 relative overflow-hidden group">
+                                                <div className="absolute top-0 right-10 p-8 opacity-[0.03] group-hover:opacity-[0.07] transition-opacity">
+                                                    <span className="material-symbols-outlined text-[150px]">article</span>
+                                                </div>
+
+                                                <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 relative z-10">
+                                                    <div className="flex items-center gap-4">
+                                                        <div className="size-12 rounded-[22px] bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center">
+                                                            <span className="material-symbols-outlined text-emerald-500 text-3xl">menu_book</span>
+                                                        </div>
+                                                        <div className="flex flex-col">
+                                                            <h3 className="text-2xl font-black uppercase italic tracking-tighter text-white">Blog Protocol</h3>
+                                                            <span className="text-[10px] font-black text-emerald-500/30 uppercase tracking-[0.3em]">Section toggle and title configuration</span>
+                                                        </div>
+                                                    </div>
+
+                                                    <button
+                                                        onClick={() => updateGlobalConfig({ blog_enabled: !config.isBlogEnabled })}
+                                                        className={`group/btn h-14 px-8 rounded-2xl flex items-center gap-4 transition-all duration-500 border overflow-hidden relative ${config.isBlogEnabled ? 'bg-emerald-500 border-emerald-400/50 text-white' : 'bg-white/5 border-white/10 text-white/30'}`}
+                                                    >
+                                                        <div className="flex flex-col items-start leading-none gap-0.5">
+                                                            <span className="text-[10px] font-black uppercase tracking-widest">{config.isBlogEnabled ? 'Active Sequence' : 'Sequence Halted'}</span>
+                                                            <span className="text-xs font-black uppercase tracking-[0.2em]">{config.isBlogEnabled ? 'BLOG_ENABLED' : 'BLOG_DISABLED'}</span>
+                                                        </div>
+                                                        <span className="material-symbols-outlined transition-transform duration-500">
+                                                            {config.isBlogEnabled ? 'toggle_on' : 'toggle_off'}
+                                                        </span>
+                                                    </button>
+                                                </div>
+
+                                                <div className="grid grid-cols-1 md:grid-cols-2 gap-6 relative z-10">
+                                                    <div className="flex flex-col gap-2">
+                                                        <label className="text-[9px] font-black uppercase text-white/40 tracking-[0.2em] ml-1">Blog Section Title</label>
+                                                        <input
+                                                            type="text"
+                                                            defaultValue={config.blogTitle}
+                                                            onBlur={(e) => updateGlobalConfig({ blog_title: e.target.value })}
+                                                            className="bg-black/60 border border-white/10 rounded-2xl h-14 px-6 text-sm focus:border-emerald-500/50 outline-none transition-all"
+                                                        />
+                                                    </div>
+                                                    <div className="flex flex-col gap-2">
+                                                        <label className="text-[9px] font-black uppercase text-white/40 tracking-[0.2em] ml-1">Blog Section Subtitle</label>
+                                                        <input
+                                                            type="text"
+                                                            defaultValue={config.blogSubtitle}
+                                                            onBlur={(e) => updateGlobalConfig({ blog_subtitle: e.target.value })}
+                                                            className="bg-black/60 border border-white/10 rounded-2xl h-14 px-6 text-sm focus:border-emerald-500/50 outline-none transition-all"
+                                                        />
+                                                    </div>
+                                                </div>
+                                            </div>
                                         </div>
                                     </motion.div>
                                 )}
@@ -1582,7 +1845,7 @@ const Admin: React.FC = () => {
                                 initial={{ opacity: 0 }}
                                 animate={{ opacity: 1 }}
                                 exit={{ opacity: 0 }}
-                                className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/80 backdrop-blur-xl"
+                                className="fixed inset-0 z-[999] flex items-center justify-center p-4 bg-black/80 backdrop-blur-xl"
                             >
                                 <motion.div
                                     initial={{ scale: 0.9, opacity: 0 }}
@@ -1592,7 +1855,7 @@ const Admin: React.FC = () => {
                                 >
                                     <div className="p-6 border-b border-white/5 flex items-center justify-between">
                                         <h3 className="text-xl font-black uppercase tracking-tight">{editingIntel?.id ? 'Edit Intel' : 'Register New Intel'}</h3>
-                                        <button onClick={() => setIntelModalOpen(false)} className="text-white/20 hover:text-white transition-colors">
+                                        <button onClick={() => { setIntelModalOpen(false); setModalOpen(false); }} className="text-white/20 hover:text-white transition-colors">
                                             <span className="material-symbols-outlined">close</span>
                                         </button>
                                     </div>
@@ -1646,11 +1909,11 @@ const Admin: React.FC = () => {
                 <AnimatePresence>
                     {
                         isNotificationModalOpen && (
-                            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/80 backdrop-blur-xl">
+                            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-[999] flex items-center justify-center p-4 bg-black/80 backdrop-blur-xl">
                                 <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }} className="bg-[#0a0a0a] border border-white/10 rounded-3xl w-full max-w-lg overflow-hidden shadow-2xl">
                                     <div className="p-6 border-b border-white/5 flex items-center justify-between">
                                         <h3 className="text-xl font-black uppercase tracking-tight">{editingNotification?.id ? 'Edit Banner' : 'Deploy New Banner'}</h3>
-                                        <button onClick={() => setNotificationModalOpen(false)} className="text-white/20 hover:text-white transition-colors"><span className="material-symbols-outlined">close</span></button>
+                                        <button onClick={() => { setNotificationModalOpen(false); setModalOpen(false); }} className="text-white/20 hover:text-white transition-colors"><span className="material-symbols-outlined">close</span></button>
                                     </div>
                                     <form onSubmit={saveNotification} className="p-6 flex flex-col gap-5">
                                         <div className="grid grid-cols-2 gap-4">
@@ -1698,11 +1961,11 @@ const Admin: React.FC = () => {
                 <AnimatePresence>
                     {
                         roadmapModalOpen && (
-                            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/80 backdrop-blur-xl">
+                            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-[999] flex items-center justify-center p-4 bg-black/80 backdrop-blur-xl">
                                 <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }} className="bg-[#0a0a0a] border border-white/10 rounded-3xl w-full max-w-lg overflow-hidden shadow-2xl">
                                     <div className="p-6 border-b border-white/5 flex items-center justify-between">
                                         <h3 className="text-xl font-black uppercase tracking-tight">{editingRoadmap?.id ? 'Adjust Objective' : 'New Roadmap Objective'}</h3>
-                                        <button onClick={() => setRoadmapModalOpen(false)} className="text-white/20 hover:text-white transition-colors"><span className="material-symbols-outlined">close</span></button>
+                                        <button onClick={() => { setRoadmapModalOpen(false); setModalOpen(false); }} className="text-white/20 hover:text-white transition-colors"><span className="material-symbols-outlined">close</span></button>
                                     </div>
                                     <form onSubmit={saveRoadmapItem} className="p-6 flex flex-col gap-5">
                                         <div className="flex flex-col gap-1.5">
@@ -1738,6 +2001,220 @@ const Admin: React.FC = () => {
                                         </div>
                                         <button type="submit" className="w-full h-14 bg-purple-500 text-white font-black uppercase tracking-[0.3em] rounded-2xl hover:shadow-[0_0_40px_rgba(168,85,247,0.3)] transition-all">Update Roadmap</button>
                                     </form>
+                                </motion.div>
+                            </motion.div>
+                        )
+                    }
+                </AnimatePresence>
+
+                {/* BLOG POST MODAL */}
+                <AnimatePresence>
+                    {
+                        blogModalOpen && editingBlogPost && (
+                            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-[999] flex items-center justify-center p-4 bg-black/80 backdrop-blur-xl">
+                                <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }} className="bg-[#0a0a0a] border border-white/10 rounded-3xl w-full max-w-4xl max-h-[90vh] overflow-hidden shadow-2xl flex flex-col">
+                                    <div className="p-6 border-b border-white/5 flex items-center justify-between shrink-0">
+                                        <div>
+                                            <h3 className="text-xl font-black uppercase tracking-tight">
+                                                {editingBlogPost.id ? 'Edit Blog Article' : 'Write New Article'}
+                                            </h3>
+                                            <p className="text-[10px] font-mono text-white/30 uppercase mt-1">Blog Content Engine v1.0</p>
+                                        </div>
+                                        <div className="flex items-center gap-3">
+                                            <button
+                                                type="button"
+                                                onClick={() => setBlogPreviewMode(!blogPreviewMode)}
+                                                className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest border transition-all cursor-pointer ${blogPreviewMode ? 'bg-emerald-500/20 border-emerald-500/30 text-emerald-400' : 'bg-white/5 border-white/10 text-white/40'}`}
+                                            >
+                                                {blogPreviewMode ? 'Editor Mode' : 'Live Preview'}
+                                            </button>
+                                            <button onClick={() => { setBlogModalOpen(false); setModalOpen(false); setEditingBlogPost(null); }} className="text-white/20 hover:text-white transition-colors cursor-pointer">
+                                                <span className="material-symbols-outlined">close</span>
+                                            </button>
+                                        </div>
+                                    </div>
+
+                                    {blogPreviewMode ? (
+                                        <div className="flex-1 overflow-y-auto p-8 custom-scrollbar">
+                                            {/* Preview mode rendering */}
+                                            <div className="max-w-3xl mx-auto flex flex-col gap-6">
+                                                {editingBlogPost.cover_image_url && (
+                                                    <img src={editingBlogPost.cover_image_url} alt="" className="w-full h-64 object-cover rounded-2xl border border-white/10" />
+                                                )}
+                                                <div className="flex flex-col gap-2">
+                                                    <div className="flex items-center gap-2">
+                                                        <span className={`text-[9px] font-black uppercase tracking-widest px-2 py-0.5 rounded ${editingBlogPost.status === 'published' ? 'bg-emerald-500/10 border border-emerald-500/20 text-emerald-400' : 'bg-white/5 border border-white/10 text-white/30'}`}>{editingBlogPost.status}</span>
+                                                        {editingBlogPost.is_featured && <span className="text-[9px] font-black uppercase tracking-widest px-2 py-0.5 rounded bg-amber-500/10 border border-amber-500/20 text-amber-400">Featured</span>}
+                                                    </div>
+                                                    <h1 className="text-3xl font-black uppercase italic tracking-tighter text-white">{editingBlogPost.title || 'Untitled Post'}</h1>
+                                                    <p className="text-sm text-white/40">{editingBlogPost.excerpt || 'No excerpt configured.'}</p>
+                                                </div>
+                                                <hr className="border-white/5" />
+                                                <div className="prose prose-invert text-sm text-white/70 leading-relaxed font-sans whitespace-pre-wrap">
+                                                    {editingBlogPost.content || 'Start typing in Editor Mode to see your post content here.'}
+                                                </div>
+                                            </div>
+                                        </div>
+                                    ) : (
+                                        <form onSubmit={saveBlogPost} className="flex-1 overflow-y-auto p-6 flex flex-col gap-5 custom-scrollbar">
+                                            {/* Article Title */}
+                                            <div className="flex flex-col gap-1.5">
+                                                <label className="text-[9px] font-black uppercase text-white/30 tracking-widest">Title</label>
+                                                <input
+                                                    required
+                                                    type="text"
+                                                    value={editingBlogPost.title ?? ''}
+                                                    onChange={e => {
+                                                        const title = e.target.value;
+                                                        const autoSlug = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)+/g, '');
+                                                        setEditingBlogPost(p => ({ ...p!, title, slug: p!.id ? p!.slug : autoSlug }));
+                                                    }}
+                                                    className="bg-white/5 border border-white/10 rounded-xl h-12 px-4 text-sm focus:border-emerald-500/50 outline-none"
+                                                    placeholder="The New Community Hub Deployment"
+                                                />
+                                            </div>
+
+                                            {/* Slug */}
+                                            <div className="flex flex-col gap-1.5">
+                                                <label className="text-[9px] font-black uppercase text-white/30 tracking-widest">URL Slug</label>
+                                                <input
+                                                    required
+                                                    type="text"
+                                                    value={editingBlogPost.slug ?? ''}
+                                                    onChange={e => setEditingBlogPost(p => ({ ...p!, slug: e.target.value.toLowerCase().replace(/[^a-z0-9-]+/g, '') }))}
+                                                    className="bg-white/5 border border-white/10 rounded-xl h-12 px-4 text-sm focus:border-emerald-500/50 outline-none font-mono"
+                                                    placeholder="new-community-hub"
+                                                />
+                                            </div>
+
+                                            {/* Cover Image URL */}
+                                            <div className="flex flex-col gap-1.5">
+                                                <label className="text-[9px] font-black uppercase text-white/30 tracking-widest">Cover Image URL</label>
+                                                <input
+                                                    type="text"
+                                                    value={editingBlogPost.cover_image_url ?? ''}
+                                                    onChange={e => setEditingBlogPost(p => ({ ...p!, cover_image_url: e.target.value }))}
+                                                    className="bg-white/5 border border-white/10 rounded-xl h-12 px-4 text-sm focus:border-emerald-500/50 outline-none"
+                                                    placeholder="https://example.com/cover.png"
+                                                />
+                                            </div>
+
+                                            {/* Excerpt */}
+                                            <div className="flex flex-col gap-1.5">
+                                                <label className="text-[9px] font-black uppercase text-white/30 tracking-widest">Excerpt / Summary</label>
+                                                <textarea
+                                                    value={editingBlogPost.excerpt ?? ''}
+                                                    onChange={e => setEditingBlogPost(p => ({ ...p!, excerpt: e.target.value }))}
+                                                    className="bg-white/5 border border-white/10 rounded-xl p-4 text-sm focus:border-emerald-500/50 outline-none h-20 resize-none"
+                                                    placeholder="Brief overview of the article..."
+                                                />
+                                            </div>
+
+                                            {/* Tags Input */}
+                                            <div className="flex flex-col gap-1.5">
+                                                <label className="text-[9px] font-black uppercase text-white/30 tracking-widest">Tags (Press Enter to add)</label>
+                                                <div className="flex flex-wrap gap-2 p-2 bg-white/5 border border-white/10 rounded-xl min-h-[50px] items-center">
+                                                    {editingBlogPost.tags?.map(t => (
+                                                        <span key={t} className="flex items-center gap-1 text-[9px] font-black uppercase tracking-widest bg-white/10 px-2.5 py-1 rounded-full text-white/80">
+                                                            {t}
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => setEditingBlogPost(p => ({ ...p!, tags: p!.tags.filter(tag => tag !== t) }))}
+                                                                className="text-white/40 hover:text-white"
+                                                            >
+                                                                <span className="material-symbols-outlined text-[12px] leading-none">close</span>
+                                                            </button>
+                                                        </span>
+                                                    ))}
+                                                    <input
+                                                        type="text"
+                                                        value={blogTagInput}
+                                                        onChange={e => setBlogTagInput(e.target.value)}
+                                                        onKeyDown={e => {
+                                                            if (e.key === 'Enter') {
+                                                                e.preventDefault();
+                                                                const tag = blogTagInput.trim().toUpperCase();
+                                                                if (tag && !editingBlogPost.tags?.includes(tag)) {
+                                                                    setEditingBlogPost(p => ({ ...p!, tags: [...(p!.tags || []), tag] }));
+                                                                }
+                                                                setBlogTagInput('');
+                                                            }
+                                                        }}
+                                                        placeholder="Add tag..."
+                                                        className="bg-transparent text-sm outline-none px-2 py-1 flex-1 min-w-[120px]"
+                                                    />
+                                                </div>
+                                            </div>
+
+                                            {/* Controls row */}
+                                            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                                                <div className="flex flex-col gap-1.5">
+                                                    <label className="text-[9px] font-black uppercase text-white/30 tracking-widest">Publish Status</label>
+                                                    <select
+                                                        value={editingBlogPost.status ?? 'draft'}
+                                                        onChange={e => setEditingBlogPost(p => ({ ...p!, status: e.target.value }))}
+                                                        className="bg-white/5 border border-white/10 rounded-xl h-12 px-4 text-sm focus:border-emerald-500/50 outline-none"
+                                                    >
+                                                        <option value="draft" className="bg-[#1a1a1a]">Draft</option>
+                                                        <option value="published" className="bg-[#1a1a1a]">Published</option>
+                                                    </select>
+                                                </div>
+
+                                                <div className="flex flex-col gap-1.5">
+                                                    <label className="text-[9px] font-black uppercase text-white/30 tracking-widest">Required Clearance</label>
+                                                    <select
+                                                        value={editingBlogPost.required_clearance_level ?? 0}
+                                                        onChange={e => setEditingBlogPost(p => ({ ...p!, required_clearance_level: parseInt(e.target.value) }))}
+                                                        className="bg-white/5 border border-white/10 rounded-xl h-12 px-4 text-sm focus:border-emerald-500/50 outline-none"
+                                                    >
+                                                        <option value={0} className="bg-[#1a1a1a]">None (Public)</option>
+                                                        <option value={1} className="bg-[#1a1a1a]">Initiate (Lvl 1)</option>
+                                                        <option value={4} className="bg-[#1a1a1a]">Operative (Lvl 4)</option>
+                                                        <option value={7} className="bg-[#1a1a1a]">Elite (Lvl 7)</option>
+                                                        <option value={9} className="bg-[#1a1a1a]">Legacy (Lvl 9)</option>
+                                                    </select>
+                                                </div>
+
+                                                <div className="flex flex-col gap-1.5">
+                                                    <label className="text-[9px] font-black uppercase text-white/30 tracking-widest">Published At (Schedule)</label>
+                                                    <input
+                                                        type="datetime-local"
+                                                        value={editingBlogPost.published_at ? new Date(editingBlogPost.published_at).toISOString().slice(0, 16) : ''}
+                                                        onChange={e => setEditingBlogPost(p => ({ ...p!, published_at: e.target.value ? new Date(e.target.value).toISOString() : undefined }))}
+                                                        className="bg-white/5 border border-white/10 rounded-xl h-12 px-4 text-sm focus:border-emerald-500/50 outline-none text-white"
+                                                    />
+                                                </div>
+
+                                                <div className="flex items-center gap-6 h-12 mt-6 pl-2">
+                                                    <label className="flex items-center gap-2 cursor-pointer select-none">
+                                                        <input
+                                                            type="checkbox"
+                                                            checked={editingBlogPost.is_featured ?? false}
+                                                            onChange={e => setEditingBlogPost(p => ({ ...p!, is_featured: e.target.checked }))}
+                                                            className="accent-emerald-500 size-4"
+                                                        />
+                                                        <span className="text-[9px] font-black uppercase text-white/40 tracking-widest">Featured</span>
+                                                    </label>
+                                                </div>
+                                            </div>
+
+                                            {/* Content Markdown Area */}
+                                            <div className="flex flex-col gap-1.5 flex-grow">
+                                                <label className="text-[9px] font-black uppercase text-white/30 tracking-widest">Article Body (Markdown)</label>
+                                                <textarea
+                                                    required
+                                                    value={editingBlogPost.content ?? ''}
+                                                    onChange={e => setEditingBlogPost(p => ({ ...p!, content: e.target.value }))}
+                                                    className="bg-white/5 border border-white/10 rounded-xl p-4 text-sm font-mono focus:border-emerald-500/50 outline-none h-72 resize-y"
+                                                    placeholder="# Write post header&#10;&#10;Write post body content with **markdown**..."
+                                                />
+                                            </div>
+
+                                            <button type="submit" className="w-full h-14 bg-emerald-500 text-white font-black uppercase tracking-[0.3em] rounded-2xl hover:shadow-[0_0_40px_rgba(16,185,129,0.3)] transition-all shrink-0">
+                                                {editingBlogPost.id ? 'Save Article' : 'Publish Article'}
+                                            </button>
+                                        </form>
+                                    )}
                                 </motion.div>
                             </motion.div>
                         )

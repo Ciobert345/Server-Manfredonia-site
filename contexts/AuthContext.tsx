@@ -84,23 +84,27 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     useEffect(() => {
         if (!isMounted.current) return;
-        const currentParams = `${user?.id}-${user?.isApproved}-${mcssKey}-${config?.mcss?.defaultBaseUrl}`;
 
-        if (user?.isApproved && mcssKey && config?.mcss?.defaultBaseUrl) {
+        // Key fallback logic: personal key > master key (if admin) > master key (if approved standard)
+        const resolvedKey = mcssKey || (user?.isAdmin ? config?.mcss?.masterAdminKey : (user?.isApproved ? config?.mcss?.masterStandardKey : null));
+
+        const currentParams = `${user?.id}-${user?.isApproved}-${user?.isAdmin}-${resolvedKey}-${config?.mcss?.defaultBaseUrl}`;
+
+        if ((user?.isApproved || user?.isAdmin) && resolvedKey && config?.mcss?.defaultBaseUrl) {
             if (lastMcssParamsRef.current !== currentParams) {
-                const service = new MCSSService(mcssKey, config.mcss.defaultBaseUrl);
+                const service = new MCSSService(resolvedKey, config.mcss.defaultBaseUrl);
                 lastMcssServiceRef.current = service;
                 lastMcssParamsRef.current = currentParams;
                 setMcssService(service);
             }
         } else {
-            if (mcssService !== null) {
+            if (lastMcssServiceRef.current !== null) {
                 lastMcssServiceRef.current = null;
                 lastMcssParamsRef.current = currentParams;
                 setMcssService(null);
             }
         }
-    }, [mcssKey, config?.mcss?.defaultBaseUrl, user?.id, user?.isApproved, mcssService]);
+    }, [mcssKey, config?.mcss?.defaultBaseUrl, config?.mcss?.masterAdminKey, config?.mcss?.masterStandardKey, user?.id, user?.isApproved, user?.isAdmin]);
 
     const finishLoading = (status: AuthLoadStatus = 'READY') => {
         if (!isMounted.current) return;

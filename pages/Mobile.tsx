@@ -585,7 +585,7 @@ const Mobile: React.FC = () => {
                 className={`fixed inset-x-2 z-40 bg-[#080808]/98 backdrop-blur-2xl border border-white/10 p-1.5 rounded-2xl transition-all duration-300 cubic-bezier(0.32, 0.72, 0, 1) shadow-2xl origin-top ${menuOpen ? 'scale-100 opacity-100' : 'scale-95 opacity-0 pointer-events-none'}`}
                 style={{ top: scrolled ? 'calc(5rem + var(--banner-height, 0px))' : 'calc(6rem + var(--banner-height, 0px))' }}
             >
-                <div className="flex items-center justify-between gap-1">
+                <div className="grid grid-cols-4 sm:flex sm:items-center sm:justify-between gap-1.5 w-full">
                     {[
                         { href: "#top", icon: "schedule", label: "Status" },
                         { href: "#dashboard", icon: "terminal", label: "Dashboard" },
@@ -605,7 +605,7 @@ const Mobile: React.FC = () => {
                                 }
                             }
                         }
-                    ].map((item, idx) => (
+                    ].map((item: any, idx) => (
                         <a
                             key={idx}
                             href={item.href || '#'}

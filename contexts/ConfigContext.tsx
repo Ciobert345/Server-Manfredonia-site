@@ -78,12 +78,17 @@ export const ConfigProvider: React.FC<{ children: React.ReactNode }> = ({ childr
                 defaultBaseUrl: db.mcss_api_url || 'https://server-manfredonia.ddns.net:25560',
                 masterStandardKey: db.masterStandardKey || '',
                 masterAdminKey: db.masterAdminKey || ''
-            }
+            },
+            isBlogEnabled: db.blog_enabled ?? false,
+            blogTitle: db.blog_title || 'Blog',
+            blogSubtitle: db.blog_subtitle || ''
         };
     };
 
     const finishLoading = (status: LoadStatus = 'READY') => {
-        if (isMounted.current && !hasFinishedInitialLoad.current) {
+        if (!isMounted.current) return;
+
+        if (!hasFinishedInitialLoad.current) {
             hasFinishedInitialLoad.current = true;
             setLoadStatus(status);
             setLoading(false);
@@ -154,7 +159,10 @@ export const ConfigProvider: React.FC<{ children: React.ReactNode }> = ({ childr
                 mcss: {
                     ...prev.mcss,
                     defaultBaseUrl: Object.prototype.hasOwnProperty.call(updates, 'mcss_api_url') ? updates.mcss_api_url : prev.mcss.defaultBaseUrl
-                }
+                },
+                isBlogEnabled: Object.prototype.hasOwnProperty.call(updates, 'blog_enabled') ? updates.blog_enabled : prev.isBlogEnabled,
+                blogTitle: Object.prototype.hasOwnProperty.call(updates, 'blog_title') ? updates.blog_title : prev.blogTitle,
+                blogSubtitle: Object.prototype.hasOwnProperty.call(updates, 'blog_subtitle') ? updates.blog_subtitle : prev.blogSubtitle,
             };
         });
         if (Object.prototype.hasOwnProperty.call(updates, 'is_dashboard_enabled')) {
@@ -192,12 +200,13 @@ export const ConfigProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             }
         }
 
+        // AGGRESSIVE SAFETY TIMEOUT: Force-enable dashboard even if Supabase/Netlify is slow
         const safetyTimeout = setTimeout(() => {
-            if (loading) {
-                // console.warn('⚠ CONFIG: Safety timeout triggered');
+            if (!hasFinishedInitialLoad.current) {
+                console.warn('⚠ CONFIG: Aggressive safety timeout triggered (6s)');
                 finishLoading('TIMEOUT');
             }
-        }, 5000);
+        }, 6000);
 
         fetchAllData();
 

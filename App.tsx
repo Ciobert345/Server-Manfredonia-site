@@ -11,23 +11,34 @@ import Information from './pages/Information';
 import Mobile from './pages/Mobile';
 import MobileAccount from './pages/MobileAccount';
 import Account from './pages/Account';
+import AppHome from './pages/app/AppHome';
+import AppAccount from './pages/app/AppAccount';
 import Admin from './pages/Admin';
 import ResetPassword from './pages/ResetPassword';
+import Blog from './pages/Blog';
+import BlogPost from './pages/BlogPost';
 import Navbar from './components/Navbar';
 import Footer from './components/Footer';
 import Terminal from './components/Terminal';
 import LoginModal from './components/LoginModal';
 import { useAuth } from './contexts/AuthContext';
 import { useConfig } from './contexts/ConfigContext';
+import { useModal } from './contexts/ModalContext';
 import { motion, AnimatePresence } from 'framer-motion';
-import { shouldRedirectToMobile, isMobilePhone } from './utils/deviceDetection';
+import { shouldRedirectToMobile, isMobilePhone, isNativeApp, resetViewMode } from './utils/deviceDetection';
 import PendingApprovalBanner from './components/PendingApprovalBanner';
+import BottomTabBar from './components/app/BottomTabBar';
+import NativeLoginGate from './components/app/NativeLoginGate';
+import AppDashboard from './pages/app/AppDashboard';
+import AppUpdates from './pages/app/AppUpdates';
 
 const AppContent: React.FC = () => {
-  const { isAuthModalOpen, setAuthModalOpen, user } = useAuth();
+  const { isAuthModalOpen, setAuthModalOpen, user, loading } = useAuth();
   const { config } = useConfig();
+  const { isModalOpen } = useModal();
   const location = useLocation();
-  const isMobilePage = location.pathname === '/mobile' || location.pathname === '/mobile-account';
+  const isMobilePage = location.pathname === '/mobile' || location.pathname === '/mobile-account' || location.pathname === '/app' || location.pathname === '/app-account';
+  const isAppView = isNativeApp() || location.pathname === '/app' || location.pathname === '/app-account';
   const [isTerminalOpen, setIsTerminalOpen] = useState(false);
   const [activeEgg, setActiveEgg] = useState<string | null>(null);
   const [isFabioOpen, setIsFabioOpen] = useState(false);
@@ -72,10 +83,16 @@ const AppContent: React.FC = () => {
   }, [isMobilePage, user, config]);
 
   useEffect(() => {
-    if (shouldRedirectToMobile() && !isMobilePage && location.pathname !== '/mobile-account') {
+    const validAppPaths = ['/app', '/app-account', '/dashboard', '/updates'];
+    if (isNativeApp() && !validAppPaths.includes(location.pathname)) {
+      window.location.hash = '#/app';
+      return;
+    }
+    if (shouldRedirectToMobile() && !isMobilePage && location.pathname !== '/mobile-account' && !isNativeApp()) {
       window.location.hash = '#/mobile';
     }
   }, [isMobilePage]);
+
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -224,8 +241,14 @@ const AppContent: React.FC = () => {
 
       {/* Cinematic Perspective Void logic moved inside terminal mode container below */}
 
-      <AnimatePresence>
-        {!isTerminalOpen ? (
+      <AnimatePresence mode="wait">
+        {loading && !isNativeApp() ? (
+          <div key="loading" className="fixed inset-0 bg-black flex items-center justify-center">
+            <div className="size-10 border-4 border-white/10 border-t-white rounded-full animate-spin" />
+          </div>
+        ) : !user && isNativeApp() ? (
+          <NativeLoginGate key="native-gate" />
+        ) : !isTerminalOpen ? (
           <motion.div
             key="site-normal"
             initial={{ opacity: 0, scale: 1.1 }}
@@ -238,25 +261,30 @@ const AppContent: React.FC = () => {
             }}
             className="flex flex-col min-h-screen w-full relative z-10"
           >
-            {!isMobilePage && <Navbar />}
-            <main className={isMobilePage ? '' : 'flex-grow'}>
+            {!(isMobilePage || isAppView || isModalOpen) && <Navbar />}
+            <main className={(isMobilePage || isAppView) ? 'flex-grow relative' : 'flex-grow'}>
               <Routes>
                 <Route path="/" element={<Home />} />
                 <Route path="/modpack" element={<Modpack />} />
                 <Route path="/utilities" element={<Utilities />} />
-                <Route path="/dashboard" element={<Dashboard />} />
+                <Route path="/dashboard" element={isNativeApp() ? <AppDashboard /> : <Dashboard />} />
                 <Route path="/dashboard-tutorial" element={<DashboardTutorial />} />
-                <Route path="/updates" element={<Updates />} />
+                <Route path="/updates" element={isNativeApp() ? <AppUpdates /> : <Updates />} />
                 <Route path="/info" element={<Information />} />
                 <Route path="/mobile" element={<Mobile />} />
                 <Route path="/account" element={<Account />} />
                 <Route path="/mobile-account" element={<MobileAccount />} />
+                <Route path="/app" element={<AppHome />} />
+                <Route path="/app-account" element={<AppAccount />} />
+                <Route path="/blog" element={<Blog />} />
+                <Route path="/blog/:slug" element={<BlogPost />} />
                 <Route path="/admin" element={<Admin />} />
                 <Route path="/reset-password" element={<ResetPassword />} />
                 <Route path="*" element={<Home />} />
               </Routes>
             </main>
-            {!isMobilePage && <Footer />}
+            {isNativeApp() && <BottomTabBar />}
+            {!(isMobilePage || isAppView || isModalOpen) && <Footer />}
           </motion.div>
         ) : (
           <motion.div

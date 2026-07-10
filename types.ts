@@ -1,4 +1,25 @@
 
+export type BlogStatus = 'draft' | 'published';
+
+export interface BlogPost {
+  id: string;
+  author_id: string;
+  author_username?: string;
+  title: string;
+  slug: string;
+  excerpt?: string;
+  content: string;
+  cover_image_url?: string;
+  status: BlogStatus;
+  is_featured: boolean;
+  required_clearance_level: number;
+  tags: string[];
+  views: number;
+  published_at?: string;
+  created_at: string;
+  updated_at: string;
+}
+
 export enum RoadmapStatus {
   PLANNED = 'PLANNED',
   IN_PROGRESS = 'IN_PROGRESS',
@@ -97,6 +118,9 @@ export interface Config {
     masterStandardKey?: string;
     masterAdminKey?: string;
   };
+  isBlogEnabled: boolean;
+  blogTitle: string;
+  blogSubtitle: string;
   // Fallback / legacy support (optional)
   serverIp?: string;
   modpackVersion?: string;

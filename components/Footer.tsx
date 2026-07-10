@@ -20,7 +20,7 @@ const Footer: React.FC = () => {
               <h5 className="text-white font-bold text-lg tracking-tight uppercase group-hover:text-shadow-glow transition-all">Server Manfredonia</h5>
             </Link>
             <p className="text-gray-500 text-xs font-mono tracking-wide">
-              © 2025 Server Manfredonia.<br />Not affiliated with Mojang Studios.
+              © 2026 Server Manfredonia.<br />Not affiliated with Mojang Studios.
             </p>
           </div>
         </div>
