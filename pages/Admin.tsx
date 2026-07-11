@@ -443,6 +443,7 @@ const Admin: React.FC = () => {
                 excerpt: editingBlogPost.excerpt || '',
                 content: editingBlogPost.content || '',
                 cover_image_url: editingBlogPost.cover_image_url || '',
+                youtube_video_url: editingBlogPost.youtube_video_url || '',
                 status: editingBlogPost.status || 'draft',
                 is_featured: editingBlogPost.is_featured ?? false,
                 required_clearance_level: editingBlogPost.required_clearance_level ?? 0,
@@ -494,6 +495,7 @@ const Admin: React.FC = () => {
                 excerpt: post.excerpt || '',
                 content: post.content || '',
                 cover_image_url: post.cover_image_url || '',
+                youtube_video_url: post.youtube_video_url || '',
                 status: 'draft',
                 is_featured: false,
                 required_clearance_level: post.required_clearance_level ?? 0,
@@ -2096,6 +2098,18 @@ const Admin: React.FC = () => {
                                                     onChange={e => setEditingBlogPost(p => ({ ...p!, cover_image_url: e.target.value }))}
                                                     className="bg-white/5 border border-white/10 rounded-xl h-12 px-4 text-sm focus:border-emerald-500/50 outline-none"
                                                     placeholder="https://example.com/cover.png"
+                                                />
+                                            </div>
+
+                                            {/* YouTube Video URL */}
+                                            <div className="flex flex-col gap-1.5">
+                                                <label className="text-[9px] font-black uppercase text-white/30 tracking-widest">YouTube Video URL</label>
+                                                <input
+                                                    type="text"
+                                                    value={editingBlogPost.youtube_video_url ?? ''}
+                                                    onChange={e => setEditingBlogPost(p => ({ ...p!, youtube_video_url: e.target.value }))}
+                                                    className="bg-white/5 border border-white/10 rounded-xl h-12 px-4 text-sm focus:border-emerald-500/50 outline-none"
+                                                    placeholder="https://www.youtube.com/watch?v=..."
                                                 />
                                             </div>
 

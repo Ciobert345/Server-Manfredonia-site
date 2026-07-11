@@ -10,6 +10,7 @@ export interface BlogPost {
   excerpt?: string;
   content: string;
   cover_image_url?: string;
+  youtube_video_url?: string;
   status: BlogStatus;
   is_featured: boolean;
   required_clearance_level: number;

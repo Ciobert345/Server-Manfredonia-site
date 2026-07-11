@@ -30,7 +30,10 @@ export const shouldRedirectToMobile = (): boolean => {
     // Check if already on mobile or app route
     if (window.location.hash.includes('/mobile') || window.location.hash.includes('/app')) return false;
 
-    // Check localStorage to respect user preference
+    // Check if already on blog route - never redirect from blog and ignore preferences
+    if (window.location.hash.includes('/blog')) return false;
+
+    // Check localStorage to respect user preference (but not for blog)
     const preference = localStorage.getItem('viewMode');
     if (preference === 'desktop') return false;
 

@@ -592,6 +592,11 @@ const Mobile: React.FC = () => {
                         { href: "#updates", icon: "newspaper", label: "Updates" },
                         { href: "#guides", icon: "school", label: "Guides" },
                         { href: "#richiedi-accesso", icon: "build", label: "Tools" },
+                        ...(config?.isBlogEnabled ? [{
+                            icon: "article",
+                            label: "Blog",
+                            action: () => navigate('/blog')
+                        }] : []),
                         {
                             id: "account-nav",
                             icon: "badge",

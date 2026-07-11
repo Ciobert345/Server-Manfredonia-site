@@ -6,6 +6,8 @@ import { useConfig } from '../contexts/ConfigContext';
 import { useAuth } from '../contexts/AuthContext';
 import { BlogPost } from '../types';
 import BlogPostCard from '../components/BlogPostCard';
+import MobilePageShell from '../components/MobilePageShell';
+import { isMobilePhone } from '../utils/deviceDetection';
 
 const POSTS_PER_PAGE = 6;
 
@@ -93,8 +95,13 @@ const Blog: React.FC = () => {
   };
 
 
+  const wrapMobile = (content: React.ReactNode) =>
+    isMobilePhone() ? (
+      <MobilePageShell subtitle="Blog" activeNav="blog">{content}</MobilePageShell>
+    ) : content;
+
   if (loading) {
-    return (
+    return wrapMobile(
       <div className="max-w-7xl mx-auto px-4 py-12 flex flex-col gap-12">
         <header className="flex flex-col gap-4">
           <div className="h-16 w-64 bg-white/5 rounded-2xl animate-pulse" />
@@ -116,7 +123,7 @@ const Blog: React.FC = () => {
     );
   }
 
-  return (
+  return wrapMobile(
     <div className="max-w-7xl mx-auto px-4 py-12 flex flex-col gap-12">
       {/* Header */}
       <header className="flex flex-col gap-4">

@@ -37,7 +37,8 @@ const AppContent: React.FC = () => {
   const { config } = useConfig();
   const { isModalOpen } = useModal();
   const location = useLocation();
-  const isMobilePage = location.pathname === '/mobile' || location.pathname === '/mobile-account' || location.pathname === '/app' || location.pathname === '/app-account';
+  const isBlogOnMobile = location.pathname.startsWith('/blog') && isMobilePhone();
+  const isMobilePage = location.pathname === '/mobile' || location.pathname === '/mobile-account' || location.pathname === '/app' || location.pathname === '/app-account' || isBlogOnMobile;
   const isAppView = isNativeApp() || location.pathname === '/app' || location.pathname === '/app-account';
   const [isTerminalOpen, setIsTerminalOpen] = useState(false);
   const [activeEgg, setActiveEgg] = useState<string | null>(null);
@@ -88,11 +89,15 @@ const AppContent: React.FC = () => {
       window.location.hash = '#/app';
       return;
     }
-    if (shouldRedirectToMobile() && !isMobilePage && location.pathname !== '/mobile-account' && !isNativeApp()) {
+    // Force clear all view preferences when on blog routes
+    if (location.pathname.startsWith('/blog')) {
+      localStorage.removeItem('viewMode');
+      localStorage.removeItem('requestedDesktopBlog');
+    }
+    if (shouldRedirectToMobile() && !isMobilePage && location.pathname !== '/mobile-account' && !isNativeApp() && !location.pathname.startsWith('/blog')) {
       window.location.hash = '#/mobile';
     }
-  }, [isMobilePage]);
-
+  }, [isMobilePage, location.pathname]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {

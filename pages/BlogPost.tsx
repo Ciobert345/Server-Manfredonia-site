@@ -5,15 +5,47 @@ import { motion } from 'framer-motion';
 import { supabase } from '../services/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { BlogPost } from '../types';
+import MobilePageShell from '../components/MobilePageShell';
+import { isMobilePhone } from '../utils/deviceDetection';
 
 const estimateReadingTime = (content: string): number => {
   const words = content.trim().split(/\s+/).length;
   return Math.max(1, Math.ceil(words / 200));
 };
 
-const markdownToHtml = (text: string): string => {
+// Extract YouTube video ID from various URL formats
+const getYouTubeVideoId = (url: string): string | null => {
+  if (!url) return null;
+  const patterns = [
+    /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/|youtube\.com\/v\/|youtube\.com\/shorts\/)([^#\&\?\n]+)/,
+    /^([a-zA-Z0-9_-]{11})$/
+  ];
+  for (const pattern of patterns) {
+    const match = url.match(pattern);
+    if (match) return match[1];
+  }
+  return null;
+};
+
+const markdownToHtml = (text: string, youtubeUrl?: string): string => {
   if (!text) return '';
-  let html = text
+
+  // First, extract images and replace with unique placeholders
+  const images: {url: string, alt: string}[] = [];
+  let processedText = text.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (match, alt, url) => {
+    const index = images.length;
+    images.push({url, alt});
+    return `__IMG_PLACEHOLDER_${index}__`;
+  });
+
+  // Also detect direct image URLs (without markdown syntax)
+  processedText = processedText.replace(/(https?:\/\/[^\s]+\.(?:png|jpg|jpeg|gif|webp|svg|bmp))/gi, (match, url) => {
+    const index = images.length;
+    images.push({url, alt: ''});
+    return `__IMG_PLACEHOLDER_${index}__`;
+  });
+
+  let html = processedText
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;');
@@ -26,8 +58,6 @@ const markdownToHtml = (text: string): string => {
   html = html.replace(/`([^`]+?)`/g, '<code class="bg-white/10 px-1.5 py-0.5 rounded text-yellow-300 font-mono text-sm border border-white/10">$1</code>');
   // Links (Markdown)
   html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer" class="text-blue-400 hover:text-blue-300 underline transition-colors">$1</a>');
-  // Images
-  html = html.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img src="$2" alt="$1" class="rounded-xl my-6 max-w-full border border-white/10" />');
   // Bold
   html = html.replace(/\*\*([^*]+?)\*\*/g, '<strong class="text-white font-bold">$1</strong>');
   // Italic
@@ -46,11 +76,40 @@ const markdownToHtml = (text: string): string => {
   html = html.replace(/^\d+\.\s+(.+)$/gm, '<li class="ml-5 mb-2 list-decimal text-white/80 pl-1">$1</li>');
   // Wrap lists
   html = html.replace(/(<li[^>]*>.*?<\/li>(?:\s*<li[^>]*>.*?<\/li>)*)/gs, '<ul class="my-4 pl-2">$1</ul>');
-  // Paragraphs
+
+  // Simple approach: replace double newlines with paragraph breaks, single newlines with br
   html = html.replace(/\n\n+/g, '</p><p class="mb-4 text-white/80 leading-relaxed">');
   html = html.replace(/\n/g, '<br>');
 
-  return '<p class="mb-4 text-white/80 leading-relaxed">' + html + '</p>';
+  // Wrap in paragraph
+  html = '<p class="mb-4 text-white/80 leading-relaxed">' + html + '</p>';
+
+  // Replace placeholders with actual img tags (AFTER all processing)
+  html = html.replace(/__IMG_PLACEHOLDER_(\d+)__/g, (match, index) => {
+    const img = images[parseInt(index)];
+    return `<img src="${img.url}" alt="${img.alt}" class="rounded-xl my-6 max-w-full border border-white/10" />`;
+  });
+
+  // Add YouTube video at the end if URL is provided
+  if (youtubeUrl) {
+    const videoId = getYouTubeVideoId(youtubeUrl);
+    if (videoId) {
+      html += `<div class="relative w-full rounded-2xl overflow-hidden border border-white/10 my-6">
+        <div class="relative pt-[56.25%]">
+          <iframe
+            src="https://www.youtube.com/embed/${videoId}"
+            title="YouTube video player"
+            frameBorder="0"
+            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+            allowFullScreen
+            class="absolute top-0 left-0 w-full h-full"
+          />
+        </div>
+      </div>`;
+    }
+  }
+
+  return html;
 };
 
 const BlogPostPage: React.FC = () => {
@@ -148,8 +207,13 @@ const BlogPostPage: React.FC = () => {
     };
   }, [slug, user]);
 
+  const wrapMobile = (content: React.ReactNode) =>
+    isMobilePhone() ? (
+      <MobilePageShell subtitle="Blog" activeNav="blog">{content}</MobilePageShell>
+    ) : content;
+
   if (loading) {
-    return (
+    return wrapMobile(
       <div className="max-w-4xl mx-auto px-4 py-12 flex flex-col gap-8 animate-pulse">
         <div className="h-6 w-24 bg-white/5 rounded-full" />
         <div className="h-72 bg-white/5 rounded-2xl" />
@@ -161,7 +225,7 @@ const BlogPostPage: React.FC = () => {
   }
 
   if (notFound) {
-    return (
+    return wrapMobile(
       <div className="max-w-4xl mx-auto px-4 py-24 flex flex-col items-center gap-6 text-center">
         <span className="material-symbols-outlined text-7xl text-white/10">article</span>
         <h1 className="text-3xl font-black uppercase italic tracking-tighter text-white/30">Articolo non trovato</h1>
@@ -175,7 +239,7 @@ const BlogPostPage: React.FC = () => {
   }
 
   if (accessDenied) {
-    return (
+    return wrapMobile(
       <div className="max-w-4xl mx-auto px-4 py-24 flex flex-col items-center gap-6 text-center">
         <div className="size-20 rounded-full bg-purple-500/10 border border-purple-500/20 flex items-center justify-center">
           <span className="material-symbols-outlined text-4xl text-purple-400">lock</span>
@@ -196,7 +260,7 @@ const BlogPostPage: React.FC = () => {
 
   const readingTime = estimateReadingTime(post.content);
 
-  return (
+  return wrapMobile(
     <motion.article
       initial={{ opacity: 0, y: 12 }}
       animate={{ opacity: 1, y: 0 }}
@@ -301,7 +365,7 @@ const BlogPostPage: React.FC = () => {
       {/* Article body */}
       <div
         className="prose prose-invert max-w-none glass-card rounded-2xl p-8 border border-white/5"
-        dangerouslySetInnerHTML={{ __html: markdownToHtml(post.content) }}
+        dangerouslySetInnerHTML={{ __html: markdownToHtml(post.content, post.youtube_video_url) }}
       />
 
       {/* Related posts */}
