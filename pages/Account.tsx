@@ -756,7 +756,7 @@ const Account: React.FC = () => {
                                         <span className="text-[10px] font-mono uppercase tracking-[0.2em] text-emerald-500">System Nominal</span>
                                     </div>
                                     <button
-                                        onClick={() => window.location.hash = '#/admin'}
+                                        onClick={() => navigate('/admin')}
                                         className="w-full px-6 py-3 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 hover:bg-emerald-500 hover:text-black transition-all font-black uppercase text-[10px] tracking-[0.2em]"
                                     >
                                         Access Terminal

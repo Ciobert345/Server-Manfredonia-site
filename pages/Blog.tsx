@@ -1,5 +1,6 @@
 
 import React, { useState, useEffect, useMemo } from 'react';
+import { Link } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { supabase } from '../services/supabase';
 import { useConfig } from '../contexts/ConfigContext';
@@ -259,8 +260,8 @@ const Blog: React.FC = () => {
 const FeaturedPostBanner: React.FC<{ post: BlogPost }> = ({ post }) => {
   const readingTime = Math.max(1, Math.ceil(post.content.trim().split(/\s+/).length / 200));
   return (
-    <a
-      href={`#/blog/${post.slug}`}
+    <Link
+      to={`/blog/${post.slug}`}
       className="group relative flex flex-col md:flex-row glass-card rounded-2xl overflow-hidden border border-white/10 hover:border-white/20 transition-all duration-300 hover:shadow-[0_20px_60px_rgba(0,0,0,0.5)]"
     >
       {post.cover_image_url && (
@@ -298,7 +299,7 @@ const FeaturedPostBanner: React.FC<{ post: BlogPost }> = ({ post }) => {
           </div>
         )}
       </div>
-    </a>
+    </Link>
   );
 };
 

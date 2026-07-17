@@ -2,6 +2,16 @@
   command = "npm run build"
   publish = "dist"
 
+[functions]
+  directory = "netlify/functions"
+
+# Blog post routes: handled by a serverless function that injects OG tags for bots
+[[redirects]]
+  from = "/blog/:slug"
+  to = "/.netlify/functions/blog-preview?slug=:slug"
+  status = 200
+
+# SPA fallback for all other routes
 [[redirects]]
   from = "/*"
   to = "/index.html"

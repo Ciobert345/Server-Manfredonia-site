@@ -27,11 +27,12 @@ export const isMobilePhone = (): boolean => {
 };
 
 export const shouldRedirectToMobile = (): boolean => {
+    const path = window.location.pathname + window.location.hash;
     // Check if already on mobile or app route
-    if (window.location.hash.includes('/mobile') || window.location.hash.includes('/app')) return false;
+    if (path.includes('/mobile') || path.includes('/app')) return false;
 
     // Check if already on blog route - never redirect from blog and ignore preferences
-    if (window.location.hash.includes('/blog')) return false;
+    if (path.includes('/blog')) return false;
 
     // Check localStorage to respect user preference (but not for blog)
     const preference = localStorage.getItem('viewMode');
@@ -47,12 +48,20 @@ export const resetViewMode = (): void => {
 
 export const switchToDesktop = (): void => {
     localStorage.setItem('viewMode', 'desktop');
-    window.location.hash = '#/';
+    if (isNativeApp()) {
+        window.location.hash = '#/';
+    } else {
+        window.location.pathname = '/';
+    }
     window.location.reload();
 };
 
 export const switchToMobile = (): void => {
     localStorage.removeItem('viewMode');
-    window.location.hash = '#/mobile';
+    if (isNativeApp()) {
+        window.location.hash = '#/mobile';
+    } else {
+        window.location.pathname = '/mobile';
+    }
     window.location.reload();
 };

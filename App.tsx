@@ -1,6 +1,6 @@
 
 import React, { useEffect, useState } from 'react';
-import { HashRouter as Router, Routes, Route, useLocation } from 'react-router-dom';
+import { HashRouter, BrowserRouter, Routes, Route, useLocation, useNavigate } from 'react-router-dom';
 import Home from './pages/Home';
 import Modpack from './pages/Modpack';
 import Utilities from './pages/Utilities';
@@ -37,6 +37,15 @@ const AppContent: React.FC = () => {
   const { config } = useConfig();
   const { isModalOpen } = useModal();
   const location = useLocation();
+  const navigate = useNavigate();
+
+  // Backward compatibility: redirect hash paths to path routing on web
+  useEffect(() => {
+    if (!isNativeApp() && window.location.hash.startsWith('#/')) {
+      const path = window.location.hash.slice(2);
+      navigate('/' + path, { replace: true });
+    }
+  }, [navigate]);
   const isBlogOnMobile = location.pathname.startsWith('/blog') && isMobilePhone();
   const isMobilePage = location.pathname === '/mobile' || location.pathname === '/mobile-account' || location.pathname === '/app' || location.pathname === '/app-account' || isBlogOnMobile;
   const isAppView = isNativeApp() || location.pathname === '/app' || location.pathname === '/app-account';
@@ -86,7 +95,7 @@ const AppContent: React.FC = () => {
   useEffect(() => {
     const validAppPaths = ['/app', '/app-account', '/dashboard', '/updates'];
     if (isNativeApp() && !validAppPaths.includes(location.pathname)) {
-      window.location.hash = '#/app';
+      navigate('/app');
       return;
     }
     // Force clear all view preferences when on blog routes
@@ -95,9 +104,9 @@ const AppContent: React.FC = () => {
       localStorage.removeItem('requestedDesktopBlog');
     }
     if (shouldRedirectToMobile() && !isMobilePage && location.pathname !== '/mobile-account' && !isNativeApp() && !location.pathname.startsWith('/blog')) {
-      window.location.hash = '#/mobile';
+      navigate('/mobile');
     }
-  }, [isMobilePage, location.pathname]);
+  }, [isMobilePage, location.pathname, navigate]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -543,6 +552,13 @@ const AppContent: React.FC = () => {
       }
     </div >
   );
+};
+
+const Router: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  if (isNativeApp()) {
+    return <HashRouter>{children}</HashRouter>;
+  }
+  return <BrowserRouter>{children}</BrowserRouter>;
 };
 
 const App: React.FC = () => {

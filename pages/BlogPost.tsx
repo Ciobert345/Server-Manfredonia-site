@@ -27,6 +27,69 @@ const getYouTubeVideoId = (url: string): string | null => {
   return null;
 };
 
+const linkifyRawText = (htmlText: string): string => {
+  const parts = htmlText.split(/(<\/?[a-zA-Z0-9]+(?:\s+[^>]*?)?>|__IMG_PLACEHOLDER_\d+__)/g);
+  const openTags: string[] = [];
+  
+  const result = parts.map(part => {
+    if (part.startsWith('<')) {
+      const isClosing = part.startsWith('</');
+      const match = part.match(/^<\/?([a-zA-Z0-9]+)/);
+      if (match) {
+        const tagName = match[1].toLowerCase();
+        if (['a', 'code', 'pre'].includes(tagName)) {
+          if (isClosing) {
+            const idx = openTags.lastIndexOf(tagName);
+            if (idx !== -1) {
+              openTags.splice(idx, 1);
+            }
+          } else {
+            openTags.push(tagName);
+          }
+        }
+      }
+      return part;
+    } else if (part.startsWith('__IMG_PLACEHOLDER_')) {
+      return part;
+    } else {
+      if (openTags.length === 0) {
+        return part.replace(/(https?:\/\/[^\s&<"]+)/gi, (match) => {
+          let url = match;
+          let suffix = '';
+          const trailingPunctuation = /[.,;:?!)]+$/;
+          const trailingMatch = url.match(trailingPunctuation);
+          if (trailingMatch) {
+            const trailingStr = trailingMatch[0];
+            let trimLen = 0;
+            for (let i = trailingStr.length - 1; i >= 0; i--) {
+              const char = trailingStr[i];
+              if (char === ')') {
+                const openCount = (url.slice(0, url.length - trimLen - 1).match(/\(/g) || []).length;
+                const closeCount = (url.slice(0, url.length - trimLen - 1).match(/\)/g) || []).length;
+                if (closeCount >= openCount) {
+                  trimLen++;
+                } else {
+                  break;
+                }
+              } else {
+                trimLen++;
+              }
+            }
+            if (trimLen > 0) {
+              suffix = url.slice(-trimLen);
+              url = url.slice(0, -trimLen);
+            }
+          }
+          return `<a href="${url}" target="_blank" rel="noopener noreferrer" class="text-blue-400 hover:text-blue-300 underline transition-colors">${url}</a>${suffix}`;
+        });
+      }
+      return part;
+    }
+  });
+
+  return result.join('');
+};
+
 const markdownToHtml = (text: string, youtubeUrl?: string): string => {
   if (!text) return '';
 
@@ -76,6 +139,9 @@ const markdownToHtml = (text: string, youtubeUrl?: string): string => {
   html = html.replace(/^\d+\.\s+(.+)$/gm, '<li class="ml-5 mb-2 list-decimal text-white/80 pl-1">$1</li>');
   // Wrap lists
   html = html.replace(/(<li[^>]*>.*?<\/li>(?:\s*<li[^>]*>.*?<\/li>)*)/gs, '<ul class="my-4 pl-2">$1</ul>');
+
+  // Convert plain text URLs to clickable links
+  html = linkifyRawText(html);
 
   // Simple approach: replace double newlines with paragraph breaks, single newlines with br
   html = html.replace(/\n\n+/g, '</p><p class="mb-4 text-white/80 leading-relaxed">');
