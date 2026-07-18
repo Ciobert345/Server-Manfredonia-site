@@ -1,7 +1,7 @@
-const https = require('https');
-const http = require('http');
+import https from 'https';
+import http from 'http';
 
-exports.handler = async (event) => {
+export const handler = async (event) => {
     const headers = {
         'Access-Control-Allow-Origin': '*',
         'Access-Control-Allow-Headers': 'Content-Type, mcss-target-url, mcss-api-key',
