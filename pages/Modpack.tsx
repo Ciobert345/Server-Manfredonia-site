@@ -96,7 +96,7 @@ const Modpack: React.FC = () => {
           {loading ? 'Querying GitHub API...' : error ? error : `Latest Release Detected: ${release?.version}`}
         </div>
         <p className="max-w-2xl text-lg text-gray-400 font-light leading-relaxed">
-          Powered by Fabric for unparalleled performance. Curated with 200+ selected mods.
+          Powered by NeoForge for unparalleled performance. Curated with 200+ selected mods.
         </p>
 
       </section>
@@ -239,7 +239,7 @@ const Modpack: React.FC = () => {
                 {installTab === 'sklauncher' && [
                   { step: '01', title: 'Prepare', desc: 'Download SKLauncher and run it.', link: 'https://skmedix.pl/' },
                   { step: '02', title: 'Extract', desc: 'Extract the contents of the Modpack .zip directly into your .minecraft folder (replace existing files).' },
-                  { step: '03', title: 'Configure', desc: 'Launch with "fabric-loader-0.14.21-1.20.1" and allocate 6-8GB RAM.' }
+                  { step: '03', title: 'Configure', desc: 'Launch with "neoforge-1.21.1 with NeoForge 21.1.235" and allocate 6-8GB RAM.' }
                 ].map(item => (
                   <div key={item.step} className="flex flex-col gap-3">
                     <span className="text-5xl font-black text-white/5 tracking-tighter">{item.step}</span>
