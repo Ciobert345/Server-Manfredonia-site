@@ -16,36 +16,166 @@ const Updates: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [expandedIndex, setExpandedIndex] = useState<number | null>(0);
 
-  // Simple Markdown to HTML parser (based on legacy logic)
-  const markdownToHtml = (text: string) => {
+  // Full-featured Markdown + HTML parser for GitHub release bodies
+  const markdownToHtml = (text: string): string => {
     if (!text) return '';
-    let html = text
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;');
 
-    // Code blocks
-    html = html.replace(/`([^`]+?)`/g, '<code class="bg-white/10 px-1.5 py-0.5 rounded text-yellow-300 font-mono text-sm border border-white/10">$1</code>');
-    // Links
-    html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer" class="text-blue-400 hover:text-blue-300 underline transition-colors">$1</a>');
-    // Bold
-    html = html.replace(/\*\*([^*]+?)\*\*/g, '<strong class="text-white font-bold">$1</strong>');
-    // Italic
-    html = html.replace(/\*([^*\n]+?)\*/g, '<em class="text-white/80 italic">$1</em>');
-    // Headers
-    html = html.replace(/^###\s+(.+)$/gm, '<h3 class="text-white mt-6 mb-3 text-xl font-bold border-l-4 border-white/30 pl-4">$1</h3>');
-    html = html.replace(/^##\s+(.+)$/gm, '<h2 class="text-white mt-8 mb-4 text-2xl font-bold border-l-4 border-white/40 pl-4">$1</h2>');
-    html = html.replace(/^#\s+(.+)$/gm, '<h1 class="text-white mt-8 mb-5 text-3xl font-bold border-l-4 border-white/50 pl-4">$1</h1>');
-    // Lists
-    html = html.replace(/^[-*]\s+(.+)$/gm, '<li class="ml-5 mb-2 list-disc text-white/90 pl-1">$1</li>');
-    html = html.replace(/^\d+\.\s+(.+)$/gm, '<li class="ml-5 mb-2 list-decimal text-white/90 pl-1">$1</li>');
-    // Wrap lists (simplified)
-    html = html.replace(/(<li[^>]*>.*?<\/li>(?:\s*<li[^>]*>.*?<\/li>)*)/gs, '<ul class="my-4 pl-4">$1</ul>');
-    // Line breaks
-    html = html.replace(/\n\n+/g, '</p><p class="mb-4 text-white/95">');
-    html = html.replace(/\n/g, '<br>');
+    // If the input already looks like HTML (e.g. from GitHub rich releases), render it directly
+    // but sanitize only truly dangerous tags while keeping all structural HTML
+    const isHtml = /<(h[1-6]|ul|ol|li|p|table|tr|th|td|blockquote|hr|strong|em|a|br|div|span)\b/i.test(text);
+    if (isHtml) {
+      return renderHtml(text);
+    }
 
-    return '<p class="mb-2 text-white/95">' + html + '</p>';
+    // Otherwise parse as Markdown (GFM)
+    return renderMarkdown(text);
+  };
+
+  // Render already-HTML content with styled classes injected
+  const renderHtml = (html: string): string => {
+    return html
+      // Headers
+      .replace(/<h1([^>]*)>/gi, '<h1$1 class="text-white mt-8 mb-5 text-3xl font-black tracking-tight border-l-4 border-emerald-400/60 pl-4">')
+      .replace(/<h2([^>]*)>/gi, '<h2$1 class="text-white mt-8 mb-4 text-2xl font-bold border-l-4 border-white/40 pl-4">')
+      .replace(/<h3([^>]*)>/gi, '<h3$1 class="text-white/90 mt-6 mb-3 text-lg font-bold border-l-4 border-white/20 pl-3">')
+      // Paragraphs
+      .replace(/<p([^>]*)>/gi, '<p$1 class="mb-3 text-white/80 leading-relaxed">')
+      // Strong
+      .replace(/<strong([^>]*)>/gi, '<strong$1 class="text-white font-bold">')
+      // Em
+      .replace(/<em([^>]*)>/gi, '<em$1 class="text-white/80 italic">')
+      // Links
+      .replace(/<a([^>]*href="[^"]*")([^>]*)>/gi, '<a$1$2 target="_blank" rel="noopener noreferrer" class="text-blue-400 hover:text-blue-300 underline transition-colors">')
+      // UL / OL
+      .replace(/<ul([^>]*)>/gi, '<ul$1 class="my-3 pl-5 flex flex-col gap-1">')
+      .replace(/<ol([^>]*)>/gi, '<ol$1 class="my-3 pl-5 flex flex-col gap-1 list-decimal">')
+      .replace(/<li([^>]*)>/gi, '<li$1 class="text-white/80 list-disc pl-1">')
+      // Blockquote
+      .replace(/<blockquote([^>]*)>/gi, '<blockquote$1 class="border-l-4 border-white/20 pl-4 my-4 italic text-white/50">')
+      // HR
+      .replace(/<hr\s*\/?>/gi, '<hr class="my-6 border-white/10">')
+      // Tables
+      .replace(/<table([^>]*)>/gi, '<div class="overflow-x-auto my-4"><table$1 class="w-full text-sm border-collapse">')
+      .replace(/<\/table>/gi, '</table></div>')
+      .replace(/<thead([^>]*)>/gi, '<thead$1 class="bg-white/5">')
+      .replace(/<th([^>]*)>/gi, '<th$1 class="px-4 py-2 text-left text-white/60 font-bold uppercase text-xs tracking-widest border-b border-white/10">')
+      .replace(/<tr([^>]*)>/gi, '<tr$1 class="border-b border-white/5 hover:bg-white/[0.03] transition-colors">')
+      .replace(/<td([^>]*)>/gi, '<td$1 class="px-4 py-2 text-white/80">')
+      // Code inline
+      .replace(/<code([^>]*)>/gi, '<code$1 class="bg-white/10 px-1.5 py-0.5 rounded text-yellow-300 font-mono text-xs border border-white/10">');
+  };
+
+  // Parse GitHub-Flavored Markdown into HTML
+  const renderMarkdown = (text: string): string => {
+    const lines = text.split('\n');
+    const out: string[] = [];
+    let i = 0;
+
+    const escapeHtml = (s: string) =>
+      s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+    const inlineFormat = (s: string): string => {
+      let r = escapeHtml(s);
+      r = r.replace(/`([^`]+?)`/g, '<code class="bg-white/10 px-1.5 py-0.5 rounded text-yellow-300 font-mono text-xs border border-white/10">$1</code>');
+      r = r.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer" class="text-blue-400 hover:text-blue-300 underline transition-colors">$1</a>');
+      r = r.replace(/\*\*([^*]+?)\*\*/g, '<strong class="text-white font-bold">$1</strong>');
+      r = r.replace(/\*([^*\n]+?)\*/g, '<em class="text-white/80 italic">$1</em>');
+      return r;
+    };
+
+    // Check if a line looks like a GFM table separator row (e.g. "-- | --")
+    const isTableSep = (line: string) => /^\s*:?-+:?\s*(\|\s*:?-+:?\s*)+\|?\s*$/.test(line);
+    const isTableRow = (line: string) => /\|/.test(line);
+
+    while (i < lines.length) {
+      const line = lines[i];
+      const trimmed = line.trim();
+
+      // Blank line
+      if (!trimmed) { out.push(''); i++; continue; }
+
+      // Horizontal rule
+      if (/^(-{3,}|\*{3,}|_{3,})$/.test(trimmed)) {
+        out.push('<hr class="my-6 border-white/10">');
+        i++; continue;
+      }
+
+      // Headers
+      const hMatch = trimmed.match(/^(#{1,3})\s+(.+)$/);
+      if (hMatch) {
+        const level = hMatch[1].length;
+        const content = inlineFormat(hMatch[2]);
+        const hClasses = [
+          'text-white mt-8 mb-5 text-3xl font-black tracking-tight border-l-4 border-emerald-400/60 pl-4',
+          'text-white mt-8 mb-4 text-2xl font-bold border-l-4 border-white/40 pl-4',
+          'text-white/90 mt-6 mb-3 text-lg font-bold border-l-4 border-white/20 pl-3',
+        ];
+        out.push(`<h${level} class="${hClasses[level - 1]}">${content}</h${level}>`);
+        i++; continue;
+      }
+
+      // Blockquote
+      if (trimmed.startsWith('>')) {
+        const bqLines: string[] = [];
+        while (i < lines.length && lines[i].trim().startsWith('>')) {
+          bqLines.push(lines[i].trim().replace(/^>\s?/, ''));
+          i++;
+        }
+        out.push(`<blockquote class="border-l-4 border-white/20 pl-4 my-4 italic text-white/50">${bqLines.map(inlineFormat).join('<br>')}</blockquote>`);
+        continue;
+      }
+
+      // Unordered list
+      if (/^[-*]\s/.test(trimmed)) {
+        const items: string[] = [];
+        while (i < lines.length && /^[-*]\s/.test(lines[i].trim())) {
+          items.push(`<li class="text-white/80 list-disc pl-1">${inlineFormat(lines[i].trim().replace(/^[-*]\s/, ''))}</li>`);
+          i++;
+        }
+        out.push(`<ul class="my-3 pl-5 flex flex-col gap-1">${items.join('')}</ul>`);
+        continue;
+      }
+
+      // Ordered list
+      if (/^\d+\.\s/.test(trimmed)) {
+        const items: string[] = [];
+        while (i < lines.length && /^\d+\.\s/.test(lines[i].trim())) {
+          items.push(`<li class="text-white/80 pl-1">${inlineFormat(lines[i].trim().replace(/^\d+\.\s/, ''))}</li>`);
+          i++;
+        }
+        out.push(`<ol class="my-3 pl-5 flex flex-col gap-1 list-decimal">${items.join('')}</ol>`);
+        continue;
+      }
+
+      // GFM Table: look-ahead for a separator row on the next line
+      if (isTableRow(trimmed) && i + 1 < lines.length && isTableSep(lines[i + 1])) {
+        const headerCells = trimmed.split('|').map(c => c.trim()).filter(c => c !== '');
+        i += 2; // skip header + separator
+        const bodyRows: string[][] = [];
+        while (i < lines.length && isTableRow(lines[i].trim())) {
+          bodyRows.push(lines[i].split('|').map(c => c.trim()).filter(c => c !== ''));
+          i++;
+        }
+        const thead = `<thead class="bg-white/5"><tr class="border-b border-white/10">${headerCells.map(h => `<th class="px-4 py-2 text-left text-white/60 font-bold uppercase text-xs tracking-widest border-b border-white/10">${inlineFormat(h)}</th>`).join('')}</tr></thead>`;
+        const tbody = `<tbody>${bodyRows.map(row => `<tr class="border-b border-white/5 hover:bg-white/[0.03] transition-colors">${row.map(cell => `<td class="px-4 py-2 text-white/80">${inlineFormat(cell)}</td>`).join('')}</tr>`).join('')}</tbody>`;
+        out.push(`<div class="overflow-x-auto my-4"><table class="w-full text-sm border-collapse">${thead}${tbody}</table></div>`);
+        continue;
+      }
+
+      // Plain paragraph
+      const paraLines: string[] = [];
+      while (i < lines.length && lines[i].trim() !== '' &&
+        !/^(#{1,3}\s|[-*]\s|\d+\.\s|>|---|\*\*\*|___)/.test(lines[i].trim()) &&
+        !(isTableRow(lines[i].trim()) && i + 1 < lines.length && isTableSep(lines[i + 1]))) {
+        paraLines.push(inlineFormat(lines[i]));
+        i++;
+      }
+      if (paraLines.length) {
+        out.push(`<p class="mb-3 text-white/80 leading-relaxed">${paraLines.join('<br>')}</p>`);
+      }
+    }
+
+    return out.join('\n');
   };
 
   useEffect(() => {
