@@ -375,44 +375,157 @@ const Mobile: React.FC = () => {
         navigator.clipboard.writeText(ip);
     };
 
-    // Markdown to HTML parser
-    const markdownToHtml = (text: string) => {
+    // Full-featured Markdown + HTML parser for GitHub release bodies (optimized for mobile styling)
+    const markdownToHtml = (text: string): string => {
         if (!text) return '';
-        let html = text
-            .replace(/&/g, '&amp;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;');
 
-        // Code blocks
-        html = html.replace(/`([^`]+?)`/g, '<code class="bg-white/10 px-1.5 py-0.5 rounded text-yellow-300 font-mono text-xs border border-white/10">$1</code>');
-        // Links (Markdown)
-        html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noreferrer" class="text-blue-400 hover:text-blue-300 underline transition-colors">$1</a>');
+        // If the input already looks like HTML (e.g. from GitHub rich releases), render it directly
+        // but sanitize only truly dangerous tags while keeping all structural HTML
+        const isHtml = /<(h[1-6]|ul|ol|li|p|table|tr|th|td|blockquote|hr|strong|em|a|br|div|span)\b/i.test(text);
+        if (isHtml) {
+            return renderHtml(text);
+        }
 
-        // Auto-link Raw URLs (excluding existing tags)
-        html = html.replace(/(<a\b[^>]*>.*?<\/a>|<code\b[^>]*>.*?<\/code>)|((?:https?:\/\/|www\.)[-a-zA-Z0-9@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b(?:[-a-zA-Z0-9()@:%_\+.~#?&//=]*))/g, (match, tag, url) => {
-            if (tag) return tag;
-            const href = url.startsWith('http') ? url : `https://${url}`;
-            return `<a href="${href}" target="_blank" rel="noreferrer" class="text-blue-400 hover:text-blue-300 underline transition-colors break-all">${url}</a>`;
-        });
+        // Otherwise parse as Markdown (GFM)
+        return renderMarkdown(text);
+    };
 
-        // Bold
-        html = html.replace(/\*\*([^*]+?)\*\*/g, '<strong class="text-white font-bold">$1</strong>');
-        // Italic
-        html = html.replace(/\*([^*\n]+?)\*/g, '<em class="text-white/80 italic">$1</em>');
-        // Headers
-        html = html.replace(/^###\s+(.+)$/gm, '<h3 class="text-white mt-4 mb-2 text-base font-bold border-l-4 border-white/30 pl-3">$1</h3>');
-        html = html.replace(/^##\s+(.+)$/gm, '<h2 class="text-white mt-6 mb-3 text-lg font-bold border-l-4 border-white/40 pl-3">$1</h2>');
-        html = html.replace(/^#\s+(.+)$/gm, '<h1 class="text-white mt-6 mb-4 text-xl font-bold border-l-4 border-white/50 pl-3">$1</h1>');
-        // Lists
-        html = html.replace(/^[-*]\s+(.+)$/gm, '<li class="ml-4 mb-1.5 list-disc text-white/90 pl-1 text-xs">$1</li>');
-        html = html.replace(/^\d+\.\s+(.+)$/gm, '<li class="ml-4 mb-1.5 list-decimal text-white/90 pl-1 text-xs">$1</li>');
-        // Wrap lists
-        html = html.replace(/(<li[^>]*>.*?<\/li>(?:\s*<li[^>]*>.*?<\/li>)*)/gs, '<ul class="my-3 pl-3">$1</ul>');
-        // Line breaks
-        html = html.replace(/\n\n+/g, '</p><p class="mb-2 text-white/95 text-xs">');
-        html = html.replace(/\n/g, '<br>');
+    // Render already-HTML content with styled classes injected for mobile
+    const renderHtml = (html: string): string => {
+        return html
+            // Headers
+            .replace(/<h1([^>]*)>/gi, '<h1$1 class="text-white mt-5 mb-3 text-lg font-black tracking-tight border-l-4 border-emerald-400/60 pl-3">')
+            .replace(/<h2([^>]*)>/gi, '<h2$1 class="text-white mt-5 mb-3 text-md font-bold border-l-4 border-white/40 pl-3">')
+            .replace(/<h3([^>]*)>/gi, '<h3$1 class="text-white/90 mt-4 mb-2 text-sm font-bold border-l-4 border-white/20 pl-2">')
+            // Paragraphs
+            .replace(/<p([^>]*)>/gi, '<p$1 class="mb-2 text-white/95 text-xs leading-relaxed">')
+            // Strong
+            .replace(/<strong([^>]*)>/gi, '<strong$1 class="text-white font-bold">')
+            // Em
+            .replace(/<em([^>]*)>/gi, '<em$1 class="text-white/80 italic">')
+            // Links
+            .replace(/<a([^>]*href="[^"]*")([^>]*)>/gi, '<a$1$2 target="_blank" rel="noopener noreferrer" class="text-blue-400 hover:text-blue-300 underline transition-colors break-all">')
+            // UL / OL
+            .replace(/<ul([^>]*)>/gi, '<ul$1 class="my-2 pl-4 flex flex-col gap-1 list-disc text-xs text-white/90">')
+            .replace(/<ol([^>]*)>/gi, '<ol$1 class="my-2 pl-4 flex flex-col gap-1 list-decimal text-xs text-white/90">')
+            .replace(/<li([^>]*)>/gi, '<li$1 class="pl-1 text-xs">')
+            // Blockquote
+            .replace(/<blockquote([^>]*)>/gi, '<blockquote$1 class="border-l-4 border-white/20 pl-3 my-3 italic text-white/50 text-xs">')
+            // HR
+            .replace(/<hr\s*\/?>/gi, '<hr class="my-4 border-white/10">')
+            // Tables
+            .replace(/<table([^>]*)>/gi, '<div class="overflow-x-auto my-3"><table$1 class="w-full text-[11px] border-collapse">')
+            .replace(/<\/table>/gi, '</table></div>')
+            .replace(/<thead([^>]*)>/gi, '<thead$1 class="bg-white/5">')
+            .replace(/<th([^>]*)>/gi, '<th$1 class="px-3 py-1.5 text-left text-white/60 font-bold uppercase text-[10px] tracking-wider border-b border-white/10">')
+            .replace(/<tr([^>]*)>/gi, '<tr$1 class="border-b border-white/5 hover:bg-white/[0.03] transition-colors">')
+            .replace(/<td([^>]*)>/gi, '<td$1 class="px-3 py-1.5 text-white/80">')
+            // Code inline
+            .replace(/<code([^>]*)>/gi, '<code$1 class="bg-white/10 px-1.5 py-0.5 rounded text-yellow-300 font-mono text-[10px] border border-white/10">');
+    };
 
-        return '<p class="mb-2 text-white/95 text-xs">' + html + '</p>';
+    // Parse GitHub-Flavored Markdown into HTML with mobile optimized styling
+    const renderMarkdown = (text: string): string => {
+        const lines = text.split('\n');
+        const out: string[] = [];
+        let i = 0;
+
+        const escapeHtml = (s: string) =>
+            s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+        const inlineFormat = (s: string): string => {
+            let r = escapeHtml(s);
+            r = r.replace(/`([^`]+?)`/g, '<code class="bg-white/10 px-1.5 py-0.5 rounded text-yellow-300 font-mono text-[10px] border border-white/10">$1</code>');
+            r = r.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer" class="text-blue-400 hover:text-blue-300 underline transition-colors">$1</a>');
+            r = r.replace(/\*\*([^*]+?)\*\*/g, '<strong class="text-white font-bold">$1</strong>');
+            r = r.replace(/\*([^*\n]+?)\*/g, '<em class="text-white/80 italic">$1</em>');
+            return r;
+        };
+
+        const isTableSep = (line: string) => /^\s*:?-+:?\s*(\|\s*:?-+:?\s*)+\|?\s*$/.test(line);
+        const isTableRow = (line: string) => /\|/.test(line);
+
+        while (i < lines.length) {
+            const line = lines[i];
+            const trimmed = line.trim();
+
+            if (!trimmed) { out.push(''); i++; continue; }
+
+            if (/^(-{3,}|\*{3,}|_{3,})$/.test(trimmed)) {
+                out.push('<hr class="my-4 border-white/10">');
+                i++; continue;
+            }
+
+            const hMatch = trimmed.match(/^(#{1,3})\s+(.+)$/);
+            if (hMatch) {
+                const level = hMatch[1].length;
+                const content = inlineFormat(hMatch[2]);
+                const hClasses = [
+                    'text-white mt-5 mb-3 text-lg font-black tracking-tight border-l-4 border-emerald-400/60 pl-3',
+                    'text-white mt-5 mb-3 text-md font-bold border-l-4 border-white/40 pl-3',
+                    'text-white/90 mt-4 mb-2 text-sm font-bold border-l-4 border-white/20 pl-2',
+                ];
+                out.push(`<h${level} class="${hClasses[level - 1]}">${content}</h${level}>`);
+                i++; continue;
+            }
+
+            if (trimmed.startsWith('>')) {
+                const bqLines: string[] = [];
+                while (i < lines.length && lines[i].trim().startsWith('>')) {
+                    bqLines.push(lines[i].trim().replace(/^>\s?/, ''));
+                    i++;
+                }
+                out.push(`<blockquote class="border-l-4 border-white/20 pl-3 my-3 italic text-white/50 text-xs">${bqLines.map(inlineFormat).join('<br>')}</blockquote>`);
+                continue;
+            }
+
+            if (/^[-*]\s/.test(trimmed)) {
+                const items: string[] = [];
+                while (i < lines.length && /^[-*]\s/.test(lines[i].trim())) {
+                    items.push(`<li class="text-white/90 list-disc pl-1 text-xs">${inlineFormat(lines[i].trim().replace(/^[-*]\s/, ''))}</li>`);
+                    i++;
+                }
+                out.push(`<ul class="my-2 pl-4 flex flex-col gap-1">${items.join('')}</ul>`);
+                continue;
+            }
+
+            if (/^\d+\.\s/.test(trimmed)) {
+                const items: string[] = [];
+                while (i < lines.length && /^\d+\.\s/.test(lines[i].trim())) {
+                    items.push(`<li class="text-white/90 pl-1 text-xs">${inlineFormat(lines[i].trim().replace(/^\d+\.\s/, ''))}</li>`);
+                    i++;
+                }
+                out.push(`<ol class="my-2 pl-4 flex flex-col gap-1 list-decimal">${items.join('')}</ol>`);
+                continue;
+            }
+
+            if (isTableRow(trimmed) && i + 1 < lines.length && isTableSep(lines[i + 1])) {
+                const headerCells = trimmed.split('|').map(c => c.trim()).filter(c => c !== '');
+                i += 2;
+                const bodyRows: string[][] = [];
+                while (i < lines.length && isTableRow(lines[i].trim())) {
+                    bodyRows.push(lines[i].split('|').map(c => c.trim()).filter(c => c !== ''));
+                    i++;
+                }
+                const thead = `<thead class="bg-white/5"><tr class="border-b border-white/10">${headerCells.map(h => `<th class="px-3 py-1.5 text-left text-white/60 font-bold uppercase text-[10px] tracking-wider border-b border-white/10">${inlineFormat(h)}</th>`).join('')}</tr></thead>`;
+                const tbody = `<tbody>${bodyRows.map(row => `<tr class="border-b border-white/5 hover:bg-white/[0.03] transition-colors">${row.map(cell => `<td class="px-3 py-1.5 text-white/80">${inlineFormat(cell)}</td>`).join('')}</tr>`).join('')}</tbody>`;
+                out.push(`<div class="overflow-x-auto my-3"><table class="w-full text-[11px] border-collapse">${thead}${tbody}</table></div>`);
+                continue;
+            }
+
+            const paraLines: string[] = [];
+            while (i < lines.length && lines[i].trim() !== '' &&
+                !/^(#{1,3}\s|[-*]\s|\d+\.\s|>|---|\*\*\*|___)/.test(lines[i].trim()) &&
+                !(isTableRow(lines[i].trim()) && i + 1 < lines.length && isTableSep(lines[i + 1]))) {
+                paraLines.push(inlineFormat(lines[i]));
+                i++;
+            }
+            if (paraLines.length) {
+                out.push(`<p class="mb-2 text-white/95 text-xs leading-relaxed">${paraLines.join('<br>')}</p>`);
+            }
+        }
+
+        return out.join('\n');
     };
 
     // ... (Roadmap sorting logic)
@@ -1094,7 +1207,7 @@ const Mobile: React.FC = () => {
                                         {installTab === 'sklauncher' && [
                                             { step: '01', title: 'Prepare', desc: 'Download SKLauncher and run it.', link: 'https://skmedix.pl/', color: 'text-blue-400' },
                                             { step: '02', title: 'Extract', desc: 'Extract the contents of the Modpack .zip directly into your .minecraft folder (replace existing files).' },
-                                            { step: '03', title: 'Configure', desc: 'Launch with "fabric-loader-0.14.21-1.20.1" and allocate 6-8GB RAM.' }
+                                            { step: '03', title: 'Configure', desc: 'Launch with "NeoForge 1.21.1 with NeoForge 21.1.235" and allocate 6-8GB RAM.' }
                                         ].map(item => (
                                             <div key={item.step} className="flex flex-col gap-2 p-4 bg-white/5 rounded-xl border border-white/5">
                                                 <span className="text-4xl font-black text-white/5 tracking-tighter">{item.step}</span>
