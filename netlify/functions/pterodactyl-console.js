@@ -1,8 +1,5 @@
 import http from 'http';
 import https from 'https';
-import net from 'net';
-import tls from 'tls';
-import crypto from 'crypto';
 
 const corsHeaders = {
     'Access-Control-Allow-Origin': '*',
@@ -22,113 +19,152 @@ export const handler = async (event) => {
     if (!baseUrl || !apiKey || !serverId) {
         return {
             statusCode: 400,
-            headers: corsHeaders,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
             body: JSON.stringify({ error: 'Missing required headers' })
         };
     }
 
     // Step 1: Get WebSocket credentials via REST
     const wsCredsUrl = `${baseUrl}/api/client/servers/${serverId}/websocket`;
-    let token, socketUrl;
+    let token, socketUrl, rawWsData;
 
     try {
-        const wsData = await httpGetJson(wsCredsUrl, apiKey);
-        const attr = wsData?.attributes || wsData?.data?.attributes || {};
+        rawWsData = await httpGetJson(wsCredsUrl, apiKey);
+        const attr = rawWsData?.attributes || rawWsData?.data?.attributes || {};
         token = attr.token;
         socketUrl = attr.socket;
-
-        if (!token || !socketUrl) {
-            return {
-                statusCode: 502,
-                headers: corsHeaders,
-                body: JSON.stringify({ error: 'Pterodactyl did not return websocket credentials', raw: wsData })
-            };
-        }
     } catch (err) {
         return {
-            statusCode: 502,
-            headers: corsHeaders,
-            body: JSON.stringify({ error: `Failed to get WS credentials: ${err.message}` })
+            statusCode: 200, // Return 200 with diagnostic info so we can see what failed
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                logs: [],
+                debug: {
+                    step: 'get_ws_credentials',
+                    error: err.message,
+                    url: wsCredsUrl
+                }
+            })
         };
     }
 
-    // Step 2: Connect WebSocket using Node.js native net/tls (no external dependencies)
-    const logs = await collectLogsNative(socketUrl, token, 5000);
+    if (!token || !socketUrl) {
+        return {
+            statusCode: 200,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                logs: [],
+                debug: {
+                    step: 'parse_ws_credentials',
+                    error: 'No token or socket URL in response',
+                    raw: rawWsData,
+                    socketUrl,
+                    hasToken: !!token
+                }
+            })
+        };
+    }
+
+    // Step 2: Connect via native WebSocket (no external deps)
+    let wsResult;
+    try {
+        wsResult = await collectLogsNative(socketUrl, token, 5000);
+    } catch (err) {
+        return {
+            statusCode: 200,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                logs: [],
+                debug: {
+                    step: 'websocket_connect',
+                    error: err.message,
+                    socketUrl
+                }
+            })
+        };
+    }
 
     return {
         statusCode: 200,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ logs })
+        body: JSON.stringify({
+            logs: wsResult.logs,
+            debug: { socketUrl, logsCount: wsResult.logs.length, wsError: wsResult.error || null }
+        })
     };
 };
 
 function httpGetJson(url, apiKey) {
     return new Promise((resolve, reject) => {
-        const parsedUrl = new URL(url);
-        const transport = parsedUrl.protocol === 'https:' ? https : http;
-        const options = {
-            method: 'GET',
-            headers: {
-                'Authorization': `Bearer ${apiKey}`,
-                'Content-Type': 'application/json',
-                'Accept': 'application/json',
-                'User-Agent': 'Netlify-Console-Bridge/1.0'
-            },
-            rejectUnauthorized: false,
-            timeout: 10000
-        };
+        try {
+            const parsedUrl = new URL(url);
+            const transport = parsedUrl.protocol === 'https:' ? https : http;
+            const options = {
+                method: 'GET',
+                headers: {
+                    'Authorization': `Bearer ${apiKey}`,
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json',
+                    'User-Agent': 'Netlify-Console-Bridge/1.0'
+                },
+                rejectUnauthorized: false,
+            };
 
-        const req = transport.request(url, options, (res) => {
-            let data = '';
-            res.on('data', chunk => { data += chunk; });
-            res.on('end', () => {
-                if (res.statusCode >= 200 && res.statusCode < 300) {
-                    try { resolve(JSON.parse(data)); }
-                    catch { resolve({}); }
-                } else {
-                    try {
-                        const errData = JSON.parse(data);
-                        const detail = errData?.errors?.[0]?.detail || errData?.error || `HTTP ${res.statusCode}`;
+            const req = transport.request(url, options, (res) => {
+                let data = '';
+                res.on('data', chunk => { data += chunk; });
+                res.on('end', () => {
+                    if (res.statusCode >= 200 && res.statusCode < 300) {
+                        try { resolve(JSON.parse(data)); }
+                        catch { resolve({}); }
+                    } else {
+                        let detail = `HTTP ${res.statusCode}`;
+                        try {
+                            const errData = JSON.parse(data);
+                            detail = errData?.errors?.[0]?.detail || errData?.error || detail;
+                        } catch {}
                         reject(new Error(detail));
-                    } catch {
-                        reject(new Error(`HTTP ${res.statusCode}`));
                     }
-                }
+                });
             });
-        });
 
-        req.on('error', reject);
-        req.on('timeout', () => { req.destroy(); reject(new Error('HTTP Timeout')); });
-        req.end();
+            req.setTimeout(10000, () => { req.destroy(); reject(new Error('HTTP Timeout after 10s')); });
+            req.on('error', (e) => reject(new Error(e.message)));
+            req.end();
+        } catch (e) {
+            reject(new Error(`httpGetJson setup error: ${e.message}`));
+        }
     });
 }
 
 /**
- * WebSocket client using only Node.js built-in net/tls modules.
- * No external dependencies required.
+ * WebSocket client using only Node.js built-in net/tls/crypto modules.
  */
 function collectLogsNative(socketUrl, token, timeoutMs = 5000) {
     return new Promise((resolve) => {
         const logs = [];
         let finished = false;
+        let error = null;
         let buffer = Buffer.alloc(0);
+        let wsHandshakeDone = false;
+        let httpResponseBuf = '';
 
-        const finish = () => {
+        const finish = (err = null) => {
             if (finished) return;
             finished = true;
+            error = err;
             try { socket.destroy(); } catch {}
-            resolve(logs);
+            resolve({ logs, error: err?.message || null });
         };
 
-        const deadline = setTimeout(finish, timeoutMs);
+        const deadline = setTimeout(() => finish(null), timeoutMs);
 
-        // Parse the ws:// or wss:// URL
         let parsedUrl;
         try {
             parsedUrl = new URL(socketUrl);
-        } catch {
+        } catch (e) {
             clearTimeout(deadline);
-            return resolve(logs);
+            return resolve({ logs, error: `Invalid socket URL: ${socketUrl}` });
         }
 
         const isSecure = parsedUrl.protocol === 'wss:';
@@ -136,8 +172,9 @@ function collectLogsNative(socketUrl, token, timeoutMs = 5000) {
         const port = parseInt(parsedUrl.port) || (isSecure ? 443 : 80);
         const path = parsedUrl.pathname + (parsedUrl.search || '');
 
-        // Generate WebSocket upgrade key
-        const wsKey = crypto.randomBytes(16).toString('base64');
+        // Generate WebSocket key
+        const { createHash, randomBytes } = await import('crypto');
+        const wsKey = randomBytes(16).toString('base64');
 
         const upgradeRequest = [
             `GET ${path} HTTP/1.1`,
@@ -149,44 +186,31 @@ function collectLogsNative(socketUrl, token, timeoutMs = 5000) {
             `\r\n`
         ].join('\r\n');
 
-        let socket;
-        let wsHandshakeDone = false;
-        let httpHeadersDone = false;
-        let httpResponseBuf = '';
-
-        const onConnect = () => {
-            socket.write(upgradeRequest);
-        };
-
         const onData = (chunk) => {
             if (!wsHandshakeDone) {
                 httpResponseBuf += chunk.toString('binary');
                 const headerEnd = httpResponseBuf.indexOf('\r\n\r\n');
                 if (headerEnd === -1) return;
 
-                // Check for 101 Switching Protocols
                 if (!httpResponseBuf.startsWith('HTTP/1.1 101')) {
                     clearTimeout(deadline);
-                    return finish();
+                    return finish(new Error(`WS Handshake failed: ${httpResponseBuf.substring(0, 80)}`));
                 }
 
                 wsHandshakeDone = true;
-                const remaining = chunk.slice(chunk.length - (httpResponseBuf.length - headerEnd - 4));
+                const consumed = headerEnd + 4;
+                const remaining = chunk.slice(chunk.length - (httpResponseBuf.length - consumed));
                 buffer = remaining;
-
-                // Send auth event
                 sendWsFrame(socket, JSON.stringify({ event: 'auth', args: [token] }));
             } else {
                 buffer = Buffer.concat([buffer, chunk]);
             }
 
-            // Parse WebSocket frames from buffer
+            // Parse WebSocket frames
             while (buffer.length >= 2) {
                 const firstByte = buffer[0];
                 const secondByte = buffer[1];
-                const isFinalFrame = !!(firstByte & 0x80);
                 const opcode = firstByte & 0x0f;
-                const isMasked = !!(secondByte & 0x80);
                 let payloadLength = secondByte & 0x7f;
                 let offset = 2;
 
@@ -200,13 +224,11 @@ function collectLogsNative(socketUrl, token, timeoutMs = 5000) {
                     offset = 10;
                 }
 
-                if (isMasked) offset += 4;
                 if (buffer.length < offset + payloadLength) break;
 
                 const payload = buffer.slice(offset, offset + payloadLength);
                 buffer = buffer.slice(offset + payloadLength);
 
-                // opcode 1 = text frame
                 if (opcode === 1) {
                     try {
                         const msg = JSON.parse(payload.toString('utf8'));
@@ -219,55 +241,61 @@ function collectLogsNative(socketUrl, token, timeoutMs = 5000) {
                         }
                     } catch {}
                 } else if (opcode === 8) {
-                    // Close frame
                     clearTimeout(deadline);
                     finish();
                 }
             }
         };
 
+        let socket;
         try {
+            const { createConnection } = await import('net');
+            const { connect: tlsConnect } = await import('tls');
+
             if (isSecure) {
-                socket = tls.connect({ host, port, rejectUnauthorized: false }, onConnect);
+                socket = tlsConnect({ host, port, rejectUnauthorized: false }, () => {
+                    socket.write(upgradeRequest);
+                });
             } else {
-                socket = net.connect({ host, port }, onConnect);
+                socket = createConnection({ host, port }, () => {
+                    socket.write(upgradeRequest);
+                });
             }
 
+            socket.setTimeout(timeoutMs);
             socket.on('data', onData);
-            socket.on('error', () => { clearTimeout(deadline); finish(); });
+            socket.on('timeout', () => { clearTimeout(deadline); finish(); });
+            socket.on('error', (e) => { clearTimeout(deadline); finish(e); });
             socket.on('close', () => { clearTimeout(deadline); finish(); });
-        } catch {
+        } catch (e) {
             clearTimeout(deadline);
-            resolve(logs);
+            resolve({ logs, error: `Socket setup error: ${e.message}` });
         }
     });
 }
 
-/**
- * Sends a WebSocket text frame (unmasked, as server receives it).
- */
 function sendWsFrame(socket, text) {
-    const payload = Buffer.from(text, 'utf8');
-    const len = payload.length;
-    let header;
-
-    if (len < 126) {
-        header = Buffer.alloc(2);
-        header[0] = 0x81; // FIN + text opcode
-        header[1] = len;
-    } else if (len < 65536) {
-        header = Buffer.alloc(4);
-        header[0] = 0x81;
-        header[1] = 126;
-        header.writeUInt16BE(len, 2);
-    } else {
-        header = Buffer.alloc(10);
-        header[0] = 0x81;
-        header[1] = 127;
-        header.writeBigUInt64BE(BigInt(len), 2);
-    }
-
     try {
+        const payload = Buffer.from(text, 'utf8');
+        const len = payload.length;
+        let header;
+
+        if (len < 126) {
+            header = Buffer.alloc(2);
+            header[0] = 0x81;
+            header[1] = len;
+        } else if (len < 65536) {
+            header = Buffer.alloc(4);
+            header[0] = 0x81;
+            header[1] = 126;
+            header.writeUInt16BE(len, 2);
+        } else {
+            header = Buffer.alloc(10);
+            header[0] = 0x81;
+            header[1] = 127;
+            header.writeBigUInt64BE(BigInt(len), 2);
+        }
+
         socket.write(Buffer.concat([header, payload]));
     } catch {}
 }

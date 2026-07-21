@@ -274,16 +274,23 @@ export class PterodactylService {
 
                 if (response.ok) {
                     const data = await response.json();
+                    // Always log debug info to help diagnose issues
+                    if (data?.debug) {
+                        console.info('[PTERODACTYL CONSOLE DEBUG]', JSON.stringify(data.debug));
+                    }
                     const newLogs: string[] = data?.logs || [];
                     if (newLogs.length > 0) {
                         const existing = this.consoleLogsMap.get(serverId) || [];
-                        // Merge: keep existing commands (> [EXEC]:) and append new server logs
                         const merged = [
                             ...existing.filter(l => l.startsWith('> [EXEC]:')),
                             ...newLogs
                         ].slice(-200);
                         this.consoleLogsMap.set(serverId, merged);
                     }
+                } else {
+                    console.error('[PTERODACTYL CONSOLE] Function returned HTTP', response.status);
+                    const text = await response.text().catch(() => '');
+                    console.error('[PTERODACTYL CONSOLE] Body:', text.substring(0, 300));
                 }
             } catch (e: any) {
                 if (!SILENT_ERRORS) {
