@@ -13,9 +13,7 @@ export class PterodactylService {
     private apiKey: string;
 
     private consoleLogsMap = new Map<string, string[]>();
-    private activeSockets = new Map<string, WebSocket>();
-    private connectingSockets = new Set<string>();
-    private lastConnectAttemptMap = new Map<string, number>();
+    private lastPolledAt = new Map<string, number>();
 
     constructor(apiKey: string, baseUrl: string = DEFAULT_BASE_URL) {
         this.apiKey = apiKey ? apiKey.trim() : '';
@@ -230,89 +228,69 @@ export class PterodactylService {
         const current = this.consoleLogsMap.get(serverId) || [];
         this.consoleLogsMap.set(serverId, [...current, `> [EXEC]: ${command}`].slice(-200));
 
-        const ws = this.activeSockets.get(serverId);
-        if (ws && ws.readyState === WebSocket.OPEN) {
-            try {
-                ws.send(JSON.stringify({ event: 'send command', args: [command] }));
-            } catch {}
-        }
         return this.fetchApi(`/api/client/servers/${serverId}/command`, {
             method: 'POST',
             body: JSON.stringify({ command }),
         });
     }
 
-    private async connectConsoleSocket(serverId: string) {
-        if (this.activeSockets.has(serverId) || this.connectingSockets.has(serverId)) return;
-
-        // 45-second rate limit cooldown to prevent 429 Too Many Attempts
-        const lastAttempt = this.lastConnectAttemptMap.get(serverId) || 0;
-        if (Date.now() - lastAttempt < 45000) return;
-
-        this.lastConnectAttemptMap.set(serverId, Date.now());
-        this.connectingSockets.add(serverId);
-
-        try {
-            const { token, socket } = await this.getWebsocketToken(serverId);
-            if (!token || !socket) {
-                this.connectingSockets.delete(serverId);
-                return;
-            }
-
-            let socketUrl = socket;
-            if (window.location.protocol === 'https:' && socketUrl.startsWith('ws://')) {
-                socketUrl = socketUrl.replace(/^ws:\/\//i, 'wss://');
-            }
-
-            const ws = new WebSocket(socketUrl);
-            this.activeSockets.set(serverId, ws);
-
-            ws.onopen = () => {
-                ws.send(JSON.stringify({ event: 'auth', args: [token] }));
-            };
-
-            ws.onmessage = (event) => {
-                try {
-                    const parsed = JSON.parse(event.data);
-                    if (parsed.event === 'auth success') {
-                        ws.send(JSON.stringify({ event: 'send logs', args: [] }));
-                    } else if (parsed.event === 'console output') {
-                        const rawLog = parsed.args?.[0] || '';
-                        const cleanLog = rawLog.replace(/\x1B\[[0-9;]*[a-zA-Z]/g, '').trimEnd();
-                        if (cleanLog) {
-                            const current = this.consoleLogsMap.get(serverId) || [];
-                            const updated = [...current, cleanLog].slice(-200);
-                            this.consoleLogsMap.set(serverId, updated);
-                        }
-                    }
-                } catch {}
-            };
-
-            ws.onerror = () => {
-                this.activeSockets.delete(serverId);
-            };
-
-            ws.onclose = () => {
-                this.activeSockets.delete(serverId);
-            };
-        } catch (e: any) {
-            if (!SILENT_ERRORS) {
-                console.warn('[PTERODACTYL] Console websocket connection failed:', e.message || e);
-            }
-        } finally {
-            this.connectingSockets.delete(serverId);
-        }
-    }
-
+    /**
+     * Polls console logs via the Netlify Function pterodactyl-console,
+     * which opens the WebSocket server-side (no browser Mixed Content issues).
+     * Falls back to cached logs on error.
+     */
     async getConsole(serverId: string, amountOfLines: number = 50): Promise<string[]> {
         if (!this.consoleLogsMap.has(serverId)) {
             this.consoleLogsMap.set(serverId, [
-                `[Pterodactyl Node Stream Linked to ${serverId}]`,
-                `Type commands below to send tactical directives to the server.`
+                `[Pterodactyl Console: connecting to ${serverId}...]`,
             ]);
         }
 
-        this.connectConsoleSocket(serverId);
+        const isNative = (window as any).Capacitor?.isNative ||
+            (window as any).Capacitor?.isNativePlatform?.() ||
+            window.location.protocol === 'static-rocket:' ||
+            window.location.protocol === 'capacitor:';
+
+        // Throttle: only poll every 5 seconds max
+        const lastPoll = this.lastPolledAt.get(serverId) || 0;
+        if (Date.now() - lastPoll < 5000) {
+            return (this.consoleLogsMap.get(serverId) || []).slice(-amountOfLines);
+        }
+        this.lastPolledAt.set(serverId, Date.now());
+
+        const cleanKey = this.apiKey.replace(/^Bearer\s+/i, '');
+
+        if (!isNative) {
+            // Web: use the Netlify Function to open WebSocket server-side
+            try {
+                const response = await fetch('/.netlify/functions/pterodactyl-console', {
+                    method: 'GET',
+                    headers: {
+                        'pterodactyl-base-url': this.baseUrl,
+                        'pterodactyl-api-key': cleanKey,
+                        'pterodactyl-server-id': serverId,
+                    },
+                });
+
+                if (response.ok) {
+                    const data = await response.json();
+                    const newLogs: string[] = data?.logs || [];
+                    if (newLogs.length > 0) {
+                        const existing = this.consoleLogsMap.get(serverId) || [];
+                        // Merge: keep existing commands (> [EXEC]:) and append new server logs
+                        const merged = [
+                            ...existing.filter(l => l.startsWith('> [EXEC]:')),
+                            ...newLogs
+                        ].slice(-200);
+                        this.consoleLogsMap.set(serverId, merged);
+                    }
+                }
+            } catch (e: any) {
+                if (!SILENT_ERRORS) {
+                    console.warn('[PTERODACTYL] Console poll failed:', e.message || e);
+                }
+            }
+        }
 
         const logs = this.consoleLogsMap.get(serverId) || [];
         return logs.slice(-amountOfLines);
