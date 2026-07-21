@@ -33,9 +33,27 @@ export const handler = async (event) => {
 
     try {
         rawWsData = await httpGetJson(wsCredsUrl, apiKey);
-        const attr = rawWsData?.attributes || rawWsData?.data?.attributes || {};
+        // Pterodactyl returns {data: {token, socket}} (NOT {attributes: {token, socket}})
+        const attr = rawWsData?.attributes ||
+                     rawWsData?.data?.attributes ||
+                     rawWsData?.data || {};
         token = attr.token;
         socketUrl = attr.socket;
+
+        // If Wings FQDN is a private/local IP, replace it with the panel's host
+        // so Netlify can attempt to reach it via the external IP.
+        if (socketUrl) {
+            const panelUrl = new URL(baseUrl);
+            const panelHost = panelUrl.hostname;
+            const isLocalIp = /^(192\.168\.|10\.|172\.(1[6-9]|2[0-9]|3[01])\.)/.test(
+                new URL(socketUrl).hostname
+            );
+            if (isLocalIp && panelHost) {
+                const wsUrl = new URL(socketUrl);
+                wsUrl.hostname = panelHost;
+                socketUrl = wsUrl.toString();
+            }
+        }
     } catch (err) {
         return {
             statusCode: 200,
