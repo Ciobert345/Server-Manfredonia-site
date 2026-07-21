@@ -248,7 +248,12 @@ export class PterodactylService {
                 return;
             }
 
-            const ws = new WebSocket(socket);
+            let socketUrl = socket;
+            if (window.location.protocol === 'https:' && socketUrl.startsWith('ws://')) {
+                socketUrl = socketUrl.replace(/^ws:\/\//i, 'wss://');
+            }
+
+            const ws = new WebSocket(socketUrl);
             this.activeSockets.set(serverId, ws);
 
             ws.onopen = () => {
@@ -279,8 +284,10 @@ export class PterodactylService {
             ws.onclose = () => {
                 this.activeSockets.delete(serverId);
             };
-        } catch (e) {
-            // Socket connection failed
+        } catch (e: any) {
+            if (!SILENT_ERRORS) {
+                console.warn('[PTERODACTYL] Console websocket connection failed:', e.message || e);
+            }
         } finally {
             this.connectingSockets.delete(serverId);
         }
@@ -298,10 +305,11 @@ export class PterodactylService {
     }
 
     async getWebsocketToken(serverId: string): Promise<PterodactylWebsocketData> {
-        const data = await this.fetchApi(`/api/client/servers/${serverId}/ws`);
+        const data = await this.fetchApi(`/api/client/servers/${serverId}/websocket`);
+        const attr = data?.attributes || data?.data?.attributes || {};
         return {
-            token: data?.data?.token || '',
-            socket: data?.data?.socket || ''
+            token: attr.token || '',
+            socket: attr.socket || ''
         };
     }
 }
