@@ -15,6 +15,7 @@ export class PterodactylService {
     private consoleLogsMap = new Map<string, string[]>();
     private activeSockets = new Map<string, WebSocket>();
     private connectingSockets = new Set<string>();
+    private lastConnectAttemptMap = new Map<string, number>();
 
     constructor(apiKey: string, baseUrl: string = DEFAULT_BASE_URL) {
         this.apiKey = apiKey ? apiKey.trim() : '';
@@ -225,6 +226,10 @@ export class PterodactylService {
     }
 
     async executeCommand(serverId: string, command: string): Promise<void> {
+        // Optimistically append command to logs so user sees it in terminal
+        const current = this.consoleLogsMap.get(serverId) || [];
+        this.consoleLogsMap.set(serverId, [...current, `> [EXEC]: ${command}`].slice(-200));
+
         const ws = this.activeSockets.get(serverId);
         if (ws && ws.readyState === WebSocket.OPEN) {
             try {
@@ -240,7 +245,13 @@ export class PterodactylService {
     private async connectConsoleSocket(serverId: string) {
         if (this.activeSockets.has(serverId) || this.connectingSockets.has(serverId)) return;
 
+        // 45-second rate limit cooldown to prevent 429 Too Many Attempts
+        const lastAttempt = this.lastConnectAttemptMap.get(serverId) || 0;
+        if (Date.now() - lastAttempt < 45000) return;
+
+        this.lastConnectAttemptMap.set(serverId, Date.now());
         this.connectingSockets.add(serverId);
+
         try {
             const { token, socket } = await this.getWebsocketToken(serverId);
             if (!token || !socket) {
@@ -295,7 +306,10 @@ export class PterodactylService {
 
     async getConsole(serverId: string, amountOfLines: number = 50): Promise<string[]> {
         if (!this.consoleLogsMap.has(serverId)) {
-            this.consoleLogsMap.set(serverId, [`[Pterodactyl Console Connected to ${serverId}]`]);
+            this.consoleLogsMap.set(serverId, [
+                `[Pterodactyl Node Stream Linked to ${serverId}]`,
+                `Type commands below to send tactical directives to the server.`
+            ]);
         }
 
         this.connectConsoleSocket(serverId);
