@@ -1,7 +1,7 @@
 import { MCSSServer, MCSSStats } from './mcss';
 
 const DEFAULT_BASE_URL = 'https://panel.example.com';
-const SILENT_ERRORS = false; // Enabled for console debugging
+const SILENT_ERRORS = false;
 
 export interface PterodactylWebsocketData {
     token: string;
@@ -11,6 +11,10 @@ export interface PterodactylWebsocketData {
 export class PterodactylService {
     private baseUrl: string;
     private apiKey: string;
+
+    private consoleLogsMap = new Map<string, string[]>();
+    private activeSockets = new Map<string, WebSocket>();
+    private connectingSockets = new Set<string>();
 
     constructor(apiKey: string, baseUrl: string = DEFAULT_BASE_URL) {
         this.apiKey = apiKey ? apiKey.trim() : '';
@@ -100,7 +104,7 @@ export class PterodactylService {
                     }
                 }
 
-                // Fallback: Direct Fetch (for Vite Localhost dev server or CORS-enabled endpoints)
+                // Fallback: Direct Fetch
                 const response = await fetch(targetUrl, {
                     method: options.method || 'GET',
                     headers: {
@@ -221,17 +225,76 @@ export class PterodactylService {
     }
 
     async executeCommand(serverId: string, command: string): Promise<void> {
+        const ws = this.activeSockets.get(serverId);
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            try {
+                ws.send(JSON.stringify({ event: 'send command', args: [command] }));
+            } catch {}
+        }
         return this.fetchApi(`/api/client/servers/${serverId}/command`, {
             method: 'POST',
             body: JSON.stringify({ command }),
         });
     }
 
+    private async connectConsoleSocket(serverId: string) {
+        if (this.activeSockets.has(serverId) || this.connectingSockets.has(serverId)) return;
+
+        this.connectingSockets.add(serverId);
+        try {
+            const { token, socket } = await this.getWebsocketToken(serverId);
+            if (!token || !socket) {
+                this.connectingSockets.delete(serverId);
+                return;
+            }
+
+            const ws = new WebSocket(socket);
+            this.activeSockets.set(serverId, ws);
+
+            ws.onopen = () => {
+                ws.send(JSON.stringify({ event: 'auth', args: [token] }));
+            };
+
+            ws.onmessage = (event) => {
+                try {
+                    const parsed = JSON.parse(event.data);
+                    if (parsed.event === 'auth success') {
+                        ws.send(JSON.stringify({ event: 'send logs', args: [] }));
+                    } else if (parsed.event === 'console output') {
+                        const rawLog = parsed.args?.[0] || '';
+                        const cleanLog = rawLog.replace(/\x1B\[[0-9;]*[a-zA-Z]/g, '').trimEnd();
+                        if (cleanLog) {
+                            const current = this.consoleLogsMap.get(serverId) || [];
+                            const updated = [...current, cleanLog].slice(-200);
+                            this.consoleLogsMap.set(serverId, updated);
+                        }
+                    }
+                } catch {}
+            };
+
+            ws.onerror = () => {
+                this.activeSockets.delete(serverId);
+            };
+
+            ws.onclose = () => {
+                this.activeSockets.delete(serverId);
+            };
+        } catch (e) {
+            // Socket connection failed
+        } finally {
+            this.connectingSockets.delete(serverId);
+        }
+    }
+
     async getConsole(serverId: string, amountOfLines: number = 50): Promise<string[]> {
-        return [
-            `[Pterodactyl Console Connected to ${serverId}]`,
-            `Use executeCommand to send commands directly to the server.`
-        ];
+        if (!this.consoleLogsMap.has(serverId)) {
+            this.consoleLogsMap.set(serverId, [`[Pterodactyl Console Connected to ${serverId}]`]);
+        }
+
+        this.connectConsoleSocket(serverId);
+
+        const logs = this.consoleLogsMap.get(serverId) || [];
+        return logs.slice(-amountOfLines);
     }
 
     async getWebsocketToken(serverId: string): Promise<PterodactylWebsocketData> {
