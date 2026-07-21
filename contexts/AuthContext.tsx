@@ -2,6 +2,7 @@
 import React, { createContext, useContext, useEffect, useState, useRef } from 'react';
 import { supabase } from '../services/supabase';
 import { MCSSService } from '../services/mcss';
+import { PterodactylService } from '../services/pterodactyl';
 import { useConfig } from './ConfigContext';
 
 // Control verbosity of Auth/Intel logs
@@ -34,7 +35,7 @@ interface UserProfile {
 interface AuthContextType {
     user: UserProfile | null;
     mcssKey: string | null;
-    mcssService: MCSSService | null;
+    mcssService: MCSSService | PterodactylService | null;
     loading: boolean;
     authStatus: AuthLoadStatus;
     login: (email: string, password: string) => Promise<void>;
@@ -66,7 +67,7 @@ export const useAuth = () => {
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     const [user, setUser] = useState<UserProfile | null>(null);
     const [mcssKey, setMcssKey] = useState<string | null>(null);
-    const [mcssService, setMcssService] = useState<MCSSService | null>(null);
+    const [mcssService, setMcssService] = useState<MCSSService | PterodactylService | null>(null);
     const [loading, setLoading] = useState(true);
     const [authStatus, setAuthStatus] = useState<AuthLoadStatus>('IDLE');
     const [isAuthModalOpen, setAuthModalOpen] = useState(false);
@@ -79,23 +80,34 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     debugLog(`Rendering AuthProvider - Status: ${authStatus}, Loading: ${loading}`);
 
-    const lastMcssServiceRef = useRef<MCSSService | null>(null);
+    const lastMcssServiceRef = useRef<any>(null);
     const lastMcssParamsRef = useRef<string>('');
 
     useEffect(() => {
         if (!isMounted.current) return;
 
-        // Key fallback logic: personal key > master key (if admin) > master key (if approved standard)
-        const resolvedKey = mcssKey || (user?.isAdmin ? config?.mcss?.masterAdminKey : (user?.isApproved ? config?.mcss?.masterStandardKey : null));
+        const provider = config?.serverProvider || 'mcss';
+        let resolvedKey: string | null = null;
+        let baseUrl: string | undefined = undefined;
 
-        const currentParams = `${user?.id}-${user?.isApproved}-${user?.isAdmin}-${resolvedKey}-${config?.mcss?.defaultBaseUrl}`;
+        if (provider === 'pterodactyl') {
+            resolvedKey = mcssKey || (user?.isAdmin ? config?.pterodactyl?.masterAdminKey : (user?.isApproved ? config?.pterodactyl?.masterStandardKey : null));
+            baseUrl = config?.pterodactyl?.defaultBaseUrl;
+        } else {
+            resolvedKey = mcssKey || (user?.isAdmin ? config?.mcss?.masterAdminKey : (user?.isApproved ? config?.mcss?.masterStandardKey : null));
+            baseUrl = config?.mcss?.defaultBaseUrl;
+        }
 
-        if ((user?.isApproved || user?.isAdmin) && resolvedKey && config?.mcss?.defaultBaseUrl) {
+        const currentParams = `${provider}-${user?.id}-${user?.isApproved}-${user?.isAdmin}-${resolvedKey}-${baseUrl}`;
+
+        if ((user?.isApproved || user?.isAdmin) && resolvedKey && baseUrl) {
             if (lastMcssParamsRef.current !== currentParams) {
-                const service = new MCSSService(resolvedKey, config.mcss.defaultBaseUrl);
+                const service = provider === 'pterodactyl'
+                    ? new PterodactylService(resolvedKey, baseUrl)
+                    : new MCSSService(resolvedKey, baseUrl);
                 lastMcssServiceRef.current = service;
                 lastMcssParamsRef.current = currentParams;
-                setMcssService(service);
+                setMcssService(service as any);
             }
         } else {
             if (lastMcssServiceRef.current !== null) {
@@ -104,7 +116,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 setMcssService(null);
             }
         }
-    }, [mcssKey, config?.mcss?.defaultBaseUrl, config?.mcss?.masterAdminKey, config?.mcss?.masterStandardKey, user?.id, user?.isApproved, user?.isAdmin]);
+    }, [
+        mcssKey,
+        config?.serverProvider,
+        config?.mcss?.defaultBaseUrl, config?.mcss?.masterAdminKey, config?.mcss?.masterStandardKey,
+        config?.pterodactyl?.defaultBaseUrl, config?.pterodactyl?.masterAdminKey, config?.pterodactyl?.masterStandardKey,
+        user?.id, user?.isApproved, user?.isAdmin
+    ]);
 
     const finishLoading = (status: AuthLoadStatus = 'READY') => {
         if (!isMounted.current) return;

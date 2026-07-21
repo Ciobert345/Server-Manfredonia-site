@@ -113,7 +113,14 @@ export interface Config {
     ip: string;
     modpackVersion: string;
   };
+  serverProvider?: 'mcss' | 'pterodactyl';
   mcss?: {
+    enabled: boolean;
+    defaultBaseUrl?: string;
+    masterStandardKey?: string;
+    masterAdminKey?: string;
+  };
+  pterodactyl?: {
     enabled: boolean;
     defaultBaseUrl?: string;
     masterStandardKey?: string;

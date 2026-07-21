@@ -68,7 +68,7 @@ const Admin: React.FC = () => {
     const [activeTab, setActiveTab] = useState<'system' | 'users' | 'intel' | 'comms' | 'roadmap' | 'settings' | 'blog'>('system');
 
     // Data States
-    const { config, isDashboardGloballyEnabled, updateDashboardStatus, updateGlobalConfig, updateMcssMasterKey } = useConfig();
+    const { config, isDashboardGloballyEnabled, updateDashboardStatus, updateGlobalConfig, updateMcssMasterKey, updatePterodactylMasterKey, updateServerProvider } = useConfig();
     const [users, setUsers] = useState<Profile[]>([]);
     const [intel, setIntel] = useState<IntelAsset[]>([]);
     const [notifications, setNotifications] = useState<AdminNotification[]>([]);
@@ -1713,68 +1713,138 @@ const Admin: React.FC = () => {
                                                 </div>
                                             </div>
 
-                                            {/* MCSS INTEGRATION SETTINGS */}
+                                            {/* SERVER PROVIDER & INTEGRATION SETTINGS */}
                                             <div className="glass-card p-8 rounded-3xl border border-white/10 bg-white/[0.02] flex flex-col gap-8 relative overflow-hidden group">
                                                 <div className="absolute top-0 right-10 p-8 opacity-[0.03] group-hover:opacity-[0.07] transition-opacity">
-                                                    <span className="material-symbols-outlined text-[150px]">key</span>
+                                                    <span className="material-symbols-outlined text-[150px]">dns</span>
                                                 </div>
 
-                                                <div className="flex items-center gap-4 relative z-10">
-                                                    <div className="size-12 rounded-[22px] bg-amber-500/10 border border-amber-500/20 flex items-center justify-center">
-                                                        <span className="material-symbols-outlined text-amber-500 text-3xl">api</span>
+                                                <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 relative z-10">
+                                                    <div className="flex items-center gap-4">
+                                                        <div className="size-12 rounded-[22px] bg-amber-500/10 border border-amber-500/20 flex items-center justify-center">
+                                                            <span className="material-symbols-outlined text-amber-500 text-3xl">api</span>
+                                                        </div>
+                                                        <div className="flex flex-col">
+                                                            <h3 className="text-2xl font-black uppercase italic tracking-tighter text-white">Server Integration Provider</h3>
+                                                            <span className="text-[10px] font-black text-amber-500/30 uppercase tracking-[0.3em]">Select Active Engine & Master Keys</span>
+                                                        </div>
                                                     </div>
-                                                    <div className="flex flex-col">
-                                                        <h3 className="text-2xl font-black uppercase italic tracking-tighter text-white">MCSS Protocol</h3>
-                                                        <span className="text-[10px] font-black text-amber-500/30 uppercase tracking-[0.3em]">Master API Key Automation</span>
+
+                                                    {/* PROVIDER SWITCHER BUTTONS */}
+                                                    <div className="flex items-center bg-black/60 p-1.5 rounded-2xl border border-white/10">
+                                                        <button
+                                                            onClick={() => updateServerProvider('mcss')}
+                                                            className={`px-6 py-2.5 rounded-xl text-xs font-black uppercase tracking-widest transition-all ${config?.serverProvider !== 'pterodactyl' ? 'bg-amber-500 text-black shadow-lg shadow-amber-500/20' : 'text-white/40 hover:text-white'}`}
+                                                        >
+                                                            MCSS API
+                                                        </button>
+                                                        <button
+                                                            onClick={() => updateServerProvider('pterodactyl')}
+                                                            className={`px-6 py-2.5 rounded-xl text-xs font-black uppercase tracking-widest transition-all ${config?.serverProvider === 'pterodactyl' ? 'bg-cyan-500 text-black shadow-lg shadow-cyan-500/20' : 'text-white/40 hover:text-white'}`}
+                                                        >
+                                                            Pterodactyl API
+                                                        </button>
                                                     </div>
                                                 </div>
 
+                                                {/* PROVIDER CONFIGURATIONS */}
                                                 <div className="flex flex-col gap-6 relative z-10">
-                                                    <div className="flex flex-col gap-2">
-                                                        <label className="text-[9px] font-black uppercase text-white/40 tracking-[0.2em] ml-1">MCSS API Endpoint (Full URL)</label>
-                                                        <input
-                                                            key={`endpoint-${config.mcss?.defaultBaseUrl}`}
-                                                            type="text"
-                                                            defaultValue={config.mcss?.defaultBaseUrl}
-                                                            onBlur={(e) => updateGlobalConfig({ mcss_api_url: e.target.value })}
-                                                            className="bg-black/60 border border-white/10 rounded-2xl h-14 px-6 text-sm font-mono focus:border-amber-500/50 outline-none transition-all"
-                                                            placeholder="https://server-manfredonia.ddns.net:25560"
-                                                        />
-                                                    </div>
+                                                    {config?.serverProvider === 'pterodactyl' ? (
+                                                        /* PTERODACTYL FORM */
+                                                        <div className="flex flex-col gap-6">
+                                                            <div className="flex flex-col gap-2">
+                                                                <label className="text-[9px] font-black uppercase text-cyan-400 tracking-[0.2em] ml-1">Pterodactyl Panel API Endpoint (Full URL)</label>
+                                                                <input
+                                                                    key={`ptero-endpoint-${config?.pterodactyl?.defaultBaseUrl}`}
+                                                                    type="text"
+                                                                    defaultValue={config?.pterodactyl?.defaultBaseUrl}
+                                                                    onBlur={(e) => updateGlobalConfig({ pterodactyl_api_url: e.target.value })}
+                                                                    className="bg-black/60 border border-cyan-500/20 rounded-2xl h-14 px-6 text-sm font-mono focus:border-cyan-500/50 outline-none transition-all"
+                                                                    placeholder="https://panel.yourdomain.com"
+                                                                />
+                                                            </div>
 
-                                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                                                        <div className="flex flex-col gap-2">
-                                                            <label className="text-[9px] font-black uppercase text-amber-500/60 tracking-[0.2em] ml-1">Standard Master Key</label>
-                                                            <input
-                                                                type="password"
-                                                                onBlur={(e) => {
-                                                                    if (e.target.value.trim()) {
-                                                                        updateMcssMasterKey('standard', e.target.value);
-                                                                        e.target.value = ""; // Clear after update for maximum security
-                                                                    }
-                                                                }}
-                                                                className="bg-black/60 border border-white/10 rounded-2xl h-14 px-6 text-sm font-mono focus:border-amber-500/50 outline-none transition-all"
-                                                                placeholder="Type to update standard key..."
-                                                            />
+                                                            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                                                <div className="flex flex-col gap-2">
+                                                                    <label className="text-[9px] font-black uppercase text-cyan-500/60 tracking-[0.2em] ml-1">Pterodactyl Standard Master Key</label>
+                                                                    <input
+                                                                        type="password"
+                                                                        onBlur={(e) => {
+                                                                            if (e.target.value.trim()) {
+                                                                                updatePterodactylMasterKey('standard', e.target.value);
+                                                                                e.target.value = "";
+                                                                            }
+                                                                        }}
+                                                                        className="bg-black/60 border border-white/10 rounded-2xl h-14 px-6 text-sm font-mono focus:border-cyan-500/50 outline-none transition-all"
+                                                                        placeholder="Type to update Pterodactyl standard key..."
+                                                                    />
+                                                                </div>
+                                                                <div className="flex flex-col gap-2">
+                                                                    <label className="text-[9px] font-black uppercase text-cyan-500/60 tracking-[0.2em] ml-1">Pterodactyl Admin Master Key</label>
+                                                                    <input
+                                                                        type="password"
+                                                                        onBlur={(e) => {
+                                                                            if (e.target.value.trim()) {
+                                                                                updatePterodactylMasterKey('admin', e.target.value);
+                                                                                e.target.value = "";
+                                                                            }
+                                                                        }}
+                                                                        className="bg-black/60 border border-white/10 rounded-2xl h-14 px-6 text-sm font-mono focus:border-cyan-500/50 outline-none transition-all"
+                                                                        placeholder="Type to update Pterodactyl admin key..."
+                                                                    />
+                                                                </div>
+                                                            </div>
                                                         </div>
-                                                        <div className="flex flex-col gap-2">
-                                                            <label className="text-[9px] font-black uppercase text-amber-500/60 tracking-[0.2em] ml-1">Admin Master Key</label>
-                                                            <input
-                                                                type="password"
-                                                                onBlur={(e) => {
-                                                                    if (e.target.value.trim()) {
-                                                                        updateMcssMasterKey('admin', e.target.value);
-                                                                        e.target.value = ""; // Clear after update for maximum security
-                                                                    }
-                                                                }}
-                                                                className="bg-black/60 border border-white/10 rounded-2xl h-14 px-6 text-sm font-mono focus:border-amber-500/50 outline-none transition-all"
-                                                                placeholder="Type to update admin key..."
-                                                            />
+                                                    ) : (
+                                                        /* MCSS FORM */
+                                                        <div className="flex flex-col gap-6">
+                                                            <div className="flex flex-col gap-2">
+                                                                <label className="text-[9px] font-black uppercase text-amber-400 tracking-[0.2em] ml-1">MCSS API Endpoint (Full URL)</label>
+                                                                <input
+                                                                    key={`endpoint-${config?.mcss?.defaultBaseUrl}`}
+                                                                    type="text"
+                                                                    defaultValue={config?.mcss?.defaultBaseUrl}
+                                                                    onBlur={(e) => updateGlobalConfig({ mcss_api_url: e.target.value })}
+                                                                    className="bg-black/60 border border-amber-500/20 rounded-2xl h-14 px-6 text-sm font-mono focus:border-amber-500/50 outline-none transition-all"
+                                                                    placeholder="https://server-manfredonia.ddns.net:25560"
+                                                                />
+                                                            </div>
+
+                                                            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                                                <div className="flex flex-col gap-2">
+                                                                    <label className="text-[9px] font-black uppercase text-amber-500/60 tracking-[0.2em] ml-1">Standard Master Key</label>
+                                                                    <input
+                                                                        type="password"
+                                                                        onBlur={(e) => {
+                                                                            if (e.target.value.trim()) {
+                                                                                updateMcssMasterKey('standard', e.target.value);
+                                                                                e.target.value = "";
+                                                                            }
+                                                                        }}
+                                                                        className="bg-black/60 border border-white/10 rounded-2xl h-14 px-6 text-sm font-mono focus:border-amber-500/50 outline-none transition-all"
+                                                                        placeholder="Type to update standard key..."
+                                                                    />
+                                                                </div>
+                                                                <div className="flex flex-col gap-2">
+                                                                    <label className="text-[9px] font-black uppercase text-amber-500/60 tracking-[0.2em] ml-1">Admin Master Key</label>
+                                                                    <input
+                                                                        type="password"
+                                                                        onBlur={(e) => {
+                                                                            if (e.target.value.trim()) {
+                                                                                updateMcssMasterKey('admin', e.target.value);
+                                                                                e.target.value = "";
+                                                                            }
+                                                                        }}
+                                                                        className="bg-black/60 border border-white/10 rounded-2xl h-14 px-6 text-sm font-mono focus:border-amber-500/50 outline-none transition-all"
+                                                                        placeholder="Type to update admin key..."
+                                                                    />
+                                                                </div>
+                                                            </div>
                                                         </div>
-                                                    </div>
+                                                    )}
                                                 </div>
                                                 <p className="text-[10px] font-mono text-white/20 uppercase tracking-widest text-center px-4">
-                                                    [!IMPORTANT] I cambi qui influiranno sulle future assegnazioni. Gli utenti esistenti devono essere risincronizzati (cambiando il loro stato).
+                                                    [!IMPORTANT] Provider Attivo: <span className="text-white font-bold">{config?.serverProvider?.toUpperCase() || 'MCSS'}</span>. I cambi influiranno sulle comunicazioni del server in tempo reale.
                                                 </p>
                                             </div>
 

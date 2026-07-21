@@ -16,6 +16,8 @@ interface ConfigContextType {
     updateDashboardStatus: (enabled: boolean) => Promise<void>;
     updateGlobalConfig: (updates: any) => Promise<void>;
     updateMcssMasterKey: (id: 'standard' | 'admin', key: string) => Promise<void>;
+    updatePterodactylMasterKey: (id: 'standard' | 'admin', key: string) => Promise<void>;
+    updateServerProvider: (provider: 'mcss' | 'pterodactyl') => Promise<void>;
     notifications: InfoBanner[];
     roadmapItems: RoadmapItem[];
     loading: boolean;
@@ -73,11 +75,18 @@ export const ConfigProvider: React.FC<{ children: React.ReactNode }> = ({ childr
                     }
                 }
             },
+            serverProvider: db.server_provider || 'mcss',
             mcss: {
                 enabled: db.is_dashboard_enabled ?? true,
                 defaultBaseUrl: db.mcss_api_url || 'https://server-manfredonia.ddns.net:25560',
                 masterStandardKey: db.masterStandardKey || '',
                 masterAdminKey: db.masterAdminKey || ''
+            },
+            pterodactyl: {
+                enabled: db.is_dashboard_enabled ?? true,
+                defaultBaseUrl: db.pterodactyl_api_url || 'https://panel.example.com',
+                masterStandardKey: db.pterodactylMasterStandardKey || '',
+                masterAdminKey: db.pterodactylMasterAdminKey || ''
             },
             isBlogEnabled: db.blog_enabled ?? false,
             blogTitle: db.blog_title || 'Blog',
@@ -113,11 +122,23 @@ export const ConfigProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
             if (configResult.data) {
                 setIsDashboardGloballyEnabled(configResult.data.is_dashboard_enabled);
-                const { data: mcssMasterData } = await supabase.from('mcss_configs').select('id, mcss_api_key').in('id', ['standard', 'admin']);
-                const masterStandardKey = mcssMasterData?.find(kv => kv.id === 'standard')?.mcss_api_key || '';
-                const masterAdminKey = mcssMasterData?.find(kv => kv.id === 'admin')?.mcss_api_key || '';
+                const [mcssRes, pteroRes] = await Promise.all([
+                    supabase.from('mcss_configs').select('id, mcss_api_key').in('id', ['standard', 'admin']),
+                    supabase.from('pterodactyl_configs').select('id, pterodactyl_api_key').in('id', ['standard', 'admin']).then(res => res, () => ({ data: null }))
+                ]);
+                const masterStandardKey = mcssRes.data?.find(kv => kv.id === 'standard')?.mcss_api_key || '';
+                const masterAdminKey = mcssRes.data?.find(kv => kv.id === 'admin')?.mcss_api_key || '';
 
-                const newConfig = mapDbToConfig({ ...configResult.data, masterStandardKey, masterAdminKey }, roadData.data || []);
+                const pterodactylMasterStandardKey = pteroRes.data?.find(kv => kv.id === 'standard')?.pterodactyl_api_key || '';
+                const pterodactylMasterAdminKey = pteroRes.data?.find(kv => kv.id === 'admin')?.pterodactyl_api_key || '';
+
+                const newConfig = mapDbToConfig({
+                    ...configResult.data,
+                    masterStandardKey,
+                    masterAdminKey,
+                    pterodactylMasterStandardKey,
+                    pterodactylMasterAdminKey
+                }, roadData.data || []);
                 setConfig(newConfig);
                 localStorage.setItem('manfredonia_config_cache', JSON.stringify(newConfig));
                 finishLoading('READY');
@@ -136,6 +157,11 @@ export const ConfigProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         await supabase.from('global_config').update({ is_dashboard_enabled: enabled }).eq('id', 1);
     };
 
+    const updateServerProvider = async (provider: 'mcss' | 'pterodactyl') => {
+        await supabase.from('global_config').update({ server_provider: provider }).eq('id', 1);
+        setConfig(prev => prev ? { ...prev, serverProvider: provider } : prev);
+    };
+
     const updateGlobalConfig = async (updates: any) => {
         await supabase.from('global_config').update(updates).eq('id', 1);
         setConfig(prev => {
@@ -145,6 +171,7 @@ export const ConfigProvider: React.FC<{ children: React.ReactNode }> = ({ childr
                 isTerminalEnabled: Object.prototype.hasOwnProperty.call(updates, 'is_terminal_enabled') ? updates.is_terminal_enabled : prev.isTerminalEnabled,
                 isEmergencyEnabled: Object.prototype.hasOwnProperty.call(updates, 'is_emergency_enabled') ? updates.is_emergency_enabled : prev.isEmergencyEnabled,
                 isIntelEnabled: Object.prototype.hasOwnProperty.call(updates, 'is_intel_enabled') ? updates.is_intel_enabled : prev.isIntelEnabled,
+                serverProvider: Object.prototype.hasOwnProperty.call(updates, 'server_provider') ? updates.server_provider : prev.serverProvider,
                 siteInfo: {
                     title: Object.prototype.hasOwnProperty.call(updates, 'site_title') ? updates.site_title : prev.siteInfo.title,
                     description: Object.prototype.hasOwnProperty.call(updates, 'site_description') ? updates.site_description : prev.siteInfo.description
@@ -158,7 +185,13 @@ export const ConfigProvider: React.FC<{ children: React.ReactNode }> = ({ childr
                 },
                 mcss: {
                     ...prev.mcss,
-                    defaultBaseUrl: Object.prototype.hasOwnProperty.call(updates, 'mcss_api_url') ? updates.mcss_api_url : prev.mcss.defaultBaseUrl
+                    enabled: prev.mcss?.enabled ?? true,
+                    defaultBaseUrl: Object.prototype.hasOwnProperty.call(updates, 'mcss_api_url') ? updates.mcss_api_url : prev.mcss?.defaultBaseUrl
+                },
+                pterodactyl: {
+                    ...prev.pterodactyl,
+                    enabled: prev.pterodactyl?.enabled ?? true,
+                    defaultBaseUrl: Object.prototype.hasOwnProperty.call(updates, 'pterodactyl_api_url') ? updates.pterodactyl_api_url : prev.pterodactyl?.defaultBaseUrl
                 },
                 isBlogEnabled: Object.prototype.hasOwnProperty.call(updates, 'blog_enabled') ? updates.blog_enabled : prev.isBlogEnabled,
                 blogTitle: Object.prototype.hasOwnProperty.call(updates, 'blog_title') ? updates.blog_title : prev.blogTitle,
@@ -180,6 +213,21 @@ export const ConfigProvider: React.FC<{ children: React.ReactNode }> = ({ childr
                     ...prev.mcss,
                     masterStandardKey: id === 'standard' ? key : prev.mcss.masterStandardKey,
                     masterAdminKey: id === 'admin' ? key : prev.mcss.masterAdminKey
+                }
+            };
+        });
+    };
+
+    const updatePterodactylMasterKey = async (id: 'standard' | 'admin', key: string) => {
+        await supabase.from('pterodactyl_configs').upsert({ id, pterodactyl_api_key: key });
+        setConfig(prev => {
+            if (!prev || !prev.pterodactyl) return prev;
+            return {
+                ...prev,
+                pterodactyl: {
+                    ...prev.pterodactyl,
+                    masterStandardKey: id === 'standard' ? key : prev.pterodactyl.masterStandardKey,
+                    masterAdminKey: id === 'admin' ? key : prev.pterodactyl.masterAdminKey
                 }
             };
         });
@@ -219,7 +267,7 @@ export const ConfigProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     return (
         <ConfigContext.Provider value={{
             config, isDashboardGloballyEnabled, updateDashboardStatus, updateGlobalConfig,
-            updateMcssMasterKey, notifications, roadmapItems, loading, loadStatus, error
+            updateMcssMasterKey, updatePterodactylMasterKey, updateServerProvider, notifications, roadmapItems, loading, loadStatus, error
         }}>
             {children}
         </ConfigContext.Provider>
