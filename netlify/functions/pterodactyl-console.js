@@ -1,5 +1,8 @@
 import http from 'http';
 import https from 'https';
+import net from 'net';
+import tls from 'tls';
+import { randomBytes } from 'crypto';
 
 const corsHeaders = {
     'Access-Control-Allow-Origin': '*',
@@ -24,7 +27,7 @@ export const handler = async (event) => {
         };
     }
 
-    // Step 1: Get WebSocket credentials via REST
+    // Step 1: Get WebSocket credentials via REST (server-side, no Mixed Content issues)
     const wsCredsUrl = `${baseUrl}/api/client/servers/${serverId}/websocket`;
     let token, socketUrl, rawWsData;
 
@@ -35,15 +38,11 @@ export const handler = async (event) => {
         socketUrl = attr.socket;
     } catch (err) {
         return {
-            statusCode: 200, // Return 200 with diagnostic info so we can see what failed
+            statusCode: 200,
             headers: { ...corsHeaders, 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 logs: [],
-                debug: {
-                    step: 'get_ws_credentials',
-                    error: err.message,
-                    url: wsCredsUrl
-                }
+                debug: { step: 'get_ws_credentials', error: err.message, url: wsCredsUrl }
             })
         };
     }
@@ -54,34 +53,17 @@ export const handler = async (event) => {
             headers: { ...corsHeaders, 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 logs: [],
-                debug: {
-                    step: 'parse_ws_credentials',
-                    error: 'No token or socket URL in response',
-                    raw: rawWsData,
-                    socketUrl,
-                    hasToken: !!token
-                }
+                debug: { step: 'parse_ws_credentials', error: 'No token or socket URL', raw: rawWsData }
             })
         };
     }
 
-    // Step 2: Connect via native WebSocket (no external deps)
-    let wsResult;
+    // Step 2: Connect via native Node.js net/tls (no external deps)
+    let wsResult = { logs: [], error: null };
     try {
         wsResult = await collectLogsNative(socketUrl, token, 5000);
     } catch (err) {
-        return {
-            statusCode: 200,
-            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                logs: [],
-                debug: {
-                    step: 'websocket_connect',
-                    error: err.message,
-                    socketUrl
-                }
-            })
-        };
+        wsResult.error = err.message;
     }
 
     return {
@@ -137,24 +119,47 @@ function httpGetJson(url, apiKey) {
     });
 }
 
+function sendWsFrame(socket, text) {
+    try {
+        const payload = Buffer.from(text, 'utf8');
+        const len = payload.length;
+        let header;
+        if (len < 126) {
+            header = Buffer.alloc(2);
+            header[0] = 0x81;
+            header[1] = len;
+        } else if (len < 65536) {
+            header = Buffer.alloc(4);
+            header[0] = 0x81;
+            header[1] = 126;
+            header.writeUInt16BE(len, 2);
+        } else {
+            header = Buffer.alloc(10);
+            header[0] = 0x81;
+            header[1] = 127;
+            header.writeBigUInt64BE(BigInt(len), 2);
+        }
+        socket.write(Buffer.concat([header, payload]));
+    } catch {}
+}
+
 /**
  * WebSocket client using only Node.js built-in net/tls/crypto modules.
+ * No external dependencies required — works in Netlify Functions as-is.
  */
-function collectLogsNative(socketUrl, token, timeoutMs = 5000) {
+function collectLogsNative(socketUrl, token, timeoutMs) {
     return new Promise((resolve) => {
         const logs = [];
         let finished = false;
-        let error = null;
         let buffer = Buffer.alloc(0);
         let wsHandshakeDone = false;
         let httpResponseBuf = '';
 
-        const finish = (err = null) => {
+        const finish = (errMsg) => {
             if (finished) return;
             finished = true;
-            error = err;
             try { socket.destroy(); } catch {}
-            resolve({ logs, error: err?.message || null });
+            resolve({ logs, error: errMsg || null });
         };
 
         const deadline = setTimeout(() => finish(null), timeoutMs);
@@ -170,10 +175,9 @@ function collectLogsNative(socketUrl, token, timeoutMs = 5000) {
         const isSecure = parsedUrl.protocol === 'wss:';
         const host = parsedUrl.hostname;
         const port = parseInt(parsedUrl.port) || (isSecure ? 443 : 80);
-        const path = parsedUrl.pathname + (parsedUrl.search || '');
+        const path = (parsedUrl.pathname || '/') + (parsedUrl.search || '');
 
-        // Generate WebSocket key
-        const { createHash, randomBytes } = await import('crypto');
+        // Static import used here — no dynamic await import() needed
         const wsKey = randomBytes(16).toString('base64');
 
         const upgradeRequest = [
@@ -194,13 +198,19 @@ function collectLogsNative(socketUrl, token, timeoutMs = 5000) {
 
                 if (!httpResponseBuf.startsWith('HTTP/1.1 101')) {
                     clearTimeout(deadline);
-                    return finish(new Error(`WS Handshake failed: ${httpResponseBuf.substring(0, 80)}`));
+                    return finish(`WS Handshake failed: ${httpResponseBuf.substring(0, 100)}`);
                 }
 
                 wsHandshakeDone = true;
-                const consumed = headerEnd + 4;
-                const remaining = chunk.slice(chunk.length - (httpResponseBuf.length - consumed));
-                buffer = remaining;
+                // Any bytes after the HTTP headers are the start of the WS stream
+                const httpBufLen = Buffer.byteLength(httpResponseBuf, 'binary');
+                const chunkLen = chunk.length;
+                const afterHeaders = httpBufLen - (headerEnd + 4);
+                if (afterHeaders > 0 && chunkLen >= afterHeaders) {
+                    buffer = chunk.slice(chunkLen - afterHeaders);
+                } else {
+                    buffer = Buffer.alloc(0);
+                }
                 sendWsFrame(socket, JSON.stringify({ event: 'auth', args: [token] }));
             } else {
                 buffer = Buffer.concat([buffer, chunk]);
@@ -241,61 +251,34 @@ function collectLogsNative(socketUrl, token, timeoutMs = 5000) {
                         }
                     } catch {}
                 } else if (opcode === 8) {
+                    // Connection close frame
                     clearTimeout(deadline);
-                    finish();
+                    finish(null);
+                    return;
                 }
             }
         };
 
         let socket;
         try {
-            const { createConnection } = await import('net');
-            const { connect: tlsConnect } = await import('tls');
-
             if (isSecure) {
-                socket = tlsConnect({ host, port, rejectUnauthorized: false }, () => {
+                socket = tls.connect({ host, port, rejectUnauthorized: false }, () => {
                     socket.write(upgradeRequest);
                 });
             } else {
-                socket = createConnection({ host, port }, () => {
+                socket = net.connect({ host, port }, () => {
                     socket.write(upgradeRequest);
                 });
             }
 
             socket.setTimeout(timeoutMs);
             socket.on('data', onData);
-            socket.on('timeout', () => { clearTimeout(deadline); finish(); });
-            socket.on('error', (e) => { clearTimeout(deadline); finish(e); });
-            socket.on('close', () => { clearTimeout(deadline); finish(); });
+            socket.on('timeout', () => { clearTimeout(deadline); finish(null); });
+            socket.on('error', (e) => { clearTimeout(deadline); finish(e.message); });
+            socket.on('close', () => { clearTimeout(deadline); finish(null); });
         } catch (e) {
             clearTimeout(deadline);
             resolve({ logs, error: `Socket setup error: ${e.message}` });
         }
     });
-}
-
-function sendWsFrame(socket, text) {
-    try {
-        const payload = Buffer.from(text, 'utf8');
-        const len = payload.length;
-        let header;
-
-        if (len < 126) {
-            header = Buffer.alloc(2);
-            header[0] = 0x81;
-            header[1] = len;
-        } else if (len < 65536) {
-            header = Buffer.alloc(4);
-            header[0] = 0x81;
-            header[1] = 126;
-            header.writeUInt16BE(len, 2);
-        } else {
-            header = Buffer.alloc(10);
-            header[0] = 0x81;
-            header[1] = 127;
-            header.writeBigUInt64BE(BigInt(len), 2);
-        }
-
-        socket.write(Buffer.concat([header, payload]));
-    } catch {}
 }
