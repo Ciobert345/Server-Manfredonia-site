@@ -1,7 +1,7 @@
 import { MCSSServer, MCSSStats } from './mcss';
 
 const DEFAULT_BASE_URL = 'https://panel.example.com';
-const SILENT_ERRORS = true;
+const SILENT_ERRORS = false; // Enabled for console debugging
 
 export interface PterodactylWebsocketData {
     token: string;
@@ -13,8 +13,13 @@ export class PterodactylService {
     private apiKey: string;
 
     constructor(apiKey: string, baseUrl: string = DEFAULT_BASE_URL) {
-        this.apiKey = apiKey;
-        this.baseUrl = baseUrl.endsWith('/') ? baseUrl.slice(0, -1) : baseUrl;
+        this.apiKey = apiKey ? apiKey.trim() : '';
+        
+        let cleanUrl = baseUrl ? baseUrl.trim() : DEFAULT_BASE_URL;
+        if (cleanUrl.endsWith('/')) cleanUrl = cleanUrl.slice(0, -1);
+        if (cleanUrl.endsWith('/api/client')) cleanUrl = cleanUrl.slice(0, -11);
+        if (cleanUrl.endsWith('/api')) cleanUrl = cleanUrl.slice(0, -4);
+        this.baseUrl = cleanUrl;
     }
 
     private async fetchApi(endpoint: string, options: RequestInit = {}) {
@@ -25,7 +30,8 @@ export class PterodactylService {
             window.location.protocol === 'static-rocket:' ||
             window.location.protocol === 'capacitor:';
 
-        const authHeader = this.apiKey.startsWith('Bearer ') ? this.apiKey : `Bearer ${this.apiKey}`;
+        const cleanKey = this.apiKey.replace(/^Bearer\s+/i, '');
+        const authHeader = `Bearer ${cleanKey}`;
 
         try {
             if (isNative) {
@@ -69,20 +75,45 @@ export class PterodactylService {
                     return text ? JSON.parse(text) : {};
                 }
             } else {
-                // Web Proxy via Netlify Function
-                const response = await fetch('/.netlify/functions/pterodactyl-proxy', {
+                // Web Environment: First attempt Netlify Proxy
+                try {
+                    const response = await fetch('/.netlify/functions/pterodactyl-proxy', {
+                        method: options.method || 'GET',
+                        headers: {
+                            'pterodactyl-target-url': targetUrl,
+                            'pterodactyl-api-key': cleanKey,
+                            'Content-Type': 'application/json',
+                        },
+                        body: options.body,
+                    });
+
+                    if (response.ok) {
+                        const text = await response.text();
+                        return text ? JSON.parse(text) : {};
+                    } else if (response.status !== 404) {
+                        const errorData = await response.json().catch(() => ({}));
+                        throw new Error(errorData?.error || errorData?.errors?.[0]?.detail || `Proxy Error: ${response.status}`);
+                    }
+                } catch (proxyErr: any) {
+                    if (proxyErr.message && !proxyErr.message.includes('404')) {
+                        console.warn('[PTERODACTYL] Proxy attempt failed, trying direct fetch:', proxyErr.message);
+                    }
+                }
+
+                // Fallback: Direct Fetch (for Vite Localhost dev server or CORS-enabled endpoints)
+                const response = await fetch(targetUrl, {
                     method: options.method || 'GET',
                     headers: {
-                        'pterodactyl-target-url': targetUrl,
-                        'pterodactyl-api-key': this.apiKey,
+                        'Authorization': authHeader,
                         'Content-Type': 'application/json',
+                        'Accept': 'application/json',
                     },
                     body: options.body,
                 });
 
                 if (!response.ok) {
                     const errorData = await response.json().catch(() => ({}));
-                    throw new Error(errorData?.errors?.[0]?.detail || errorData.error || `Proxy Error: ${response.status}`);
+                    throw new Error(errorData?.errors?.[0]?.detail || errorData.error || `Pterodactyl Error: ${response.status}`);
                 }
 
                 const text = await response.text();
@@ -90,7 +121,7 @@ export class PterodactylService {
             }
         } catch (err: any) {
             if (!SILENT_ERRORS) {
-                console.error(`[PTERODACTYL] Proxy fetch failed for ${targetUrl}:`, err.message);
+                console.error(`[PTERODACTYL] Fetch failed for ${targetUrl}:`, err.message || err);
             }
             throw err;
         }
@@ -101,7 +132,6 @@ export class PterodactylService {
             const data = await this.fetchApi('/api/client');
             const items = data?.data || [];
 
-            // Fetch resources status for each server to map online/offline status correctly
             const serverPromises = items.map(async (item: any) => {
                 const attr = item.attributes || {};
                 const identifier = attr.identifier || attr.uuid || '';
@@ -110,13 +140,12 @@ export class PterodactylService {
                 try {
                     const resData = await this.fetchApi(`/api/client/servers/${identifier}/resources`);
                     const state = resData?.attributes?.current_state;
-                    // Map state to MCSS status code format (0: OFFLINE, 1: ONLINE, 2: RESTARTING, 3: STARTING, 4: STOPPING)
                     if (state === 'offline') statusCode = 0;
                     else if (state === 'running') statusCode = 1;
                     else if (state === 'starting') statusCode = 3;
                     else if (state === 'stopping') statusCode = 4;
                 } catch {
-                    // Ignore individual resource status check errors
+                    // Ignore resource check error for single server
                 }
 
                 return {
@@ -144,11 +173,10 @@ export class PterodactylService {
             const resources = attributes.resources || {};
 
             const memoryBytes = resources.memory_bytes || 0;
-            // Pterodactyl doesn't always send max memory in resources; calculate or default to percentage
             const cpuUsage = Math.round((resources.cpu_absolute || 0) * 10) / 10;
             const memoryMb = Math.round(memoryBytes / (1024 * 1024));
 
-            const rawUptime = Math.floor((resources.uptime || 0) / 1000); // Uptime is in milliseconds in Pterodactyl client resources
+            const rawUptime = Math.floor((resources.uptime || 0) / 1000);
             let formattedUptime = '00:00:00';
             if (rawUptime > 0) {
                 const hours = Math.floor(rawUptime / 3600);
@@ -159,8 +187,8 @@ export class PterodactylService {
 
             return {
                 cpuUsage: cpuUsage,
-                ramUsage: memoryMb > 0 ? Math.min(100, Math.round((memoryMb / 4096) * 100)) : 0, // Fallback RAM % estimation
-                onlinePlayers: 0, // Fallback to mcsrvstat for player count
+                ramUsage: memoryMb > 0 ? Math.min(100, Math.round((memoryMb / 4096) * 100)) : 0,
+                onlinePlayers: 0,
                 maxPlayers: 20,
                 uptime: formattedUptime
             };
@@ -200,8 +228,6 @@ export class PterodactylService {
     }
 
     async getConsole(serverId: string, amountOfLines: number = 50): Promise<string[]> {
-        // Pterodactyl uses WebSockets for live console streaming.
-        // Returns a placeholder instruction if fetched via REST polling.
         return [
             `[Pterodactyl Console Connected to ${serverId}]`,
             `Use executeCommand to send commands directly to the server.`

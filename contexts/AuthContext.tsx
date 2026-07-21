@@ -67,6 +67,7 @@ export const useAuth = () => {
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     const [user, setUser] = useState<UserProfile | null>(null);
     const [mcssKey, setMcssKey] = useState<string | null>(null);
+    const [pteroKey, setPteroKey] = useState<string | null>(null);
     const [mcssService, setMcssService] = useState<MCSSService | PterodactylService | null>(null);
     const [loading, setLoading] = useState(true);
     const [authStatus, setAuthStatus] = useState<AuthLoadStatus>('IDLE');
@@ -91,7 +92,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         let baseUrl: string | undefined = undefined;
 
         if (provider === 'pterodactyl') {
-            resolvedKey = mcssKey || (user?.isAdmin ? config?.pterodactyl?.masterAdminKey : (user?.isApproved ? config?.pterodactyl?.masterStandardKey : null));
+            resolvedKey = pteroKey || (user?.isAdmin ? config?.pterodactyl?.masterAdminKey : (user?.isApproved ? config?.pterodactyl?.masterStandardKey : null));
             baseUrl = config?.pterodactyl?.defaultBaseUrl;
         } else {
             resolvedKey = mcssKey || (user?.isAdmin ? config?.mcss?.masterAdminKey : (user?.isApproved ? config?.mcss?.masterStandardKey : null));
@@ -118,6 +119,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }
     }, [
         mcssKey,
+        pteroKey,
         config?.serverProvider,
         config?.mcss?.defaultBaseUrl, config?.mcss?.masterAdminKey, config?.mcss?.masterStandardKey,
         config?.pterodactyl?.defaultBaseUrl, config?.pterodactyl?.masterAdminKey, config?.pterodactyl?.masterStandardKey,
