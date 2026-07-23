@@ -76,10 +76,12 @@ const Dashboard: React.FC = () => {
 
         if (pendingTransition) {
           const elapsed = Date.now() - pendingTransition.startedAt;
-          if (elapsed > 30000) {
+          const isMcServerReady = effectiveStatus === 1 && (stats.isMcOnline === true || stats.onlinePlayers > 0 || (stats.uptime && stats.uptime !== '00:00:00'));
+
+          if (elapsed > 45000) {
             setPendingTransition(null);
           } else if (pendingTransition.targetOnline) {
-            if (effectiveStatus === 1) {
+            if (isMcServerReady) {
               setPendingTransition(null);
               finalStatusText = 'ONLINE';
               isOnline = true;
@@ -88,7 +90,7 @@ const Dashboard: React.FC = () => {
               isOnline = false;
             }
           } else {
-            if (effectiveStatus === 0) {
+            if (effectiveStatus === 0 && elapsed > 3500) {
               setPendingTransition(null);
               finalStatusText = 'OFFLINE';
               isOnline = false;

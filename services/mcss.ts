@@ -12,7 +12,8 @@ export interface MCSSStats {
     onlinePlayers: number;
     maxPlayers: number;
     uptime: string;
-    status: number; // 0=offline, 1=running, 3=starting, 4=stopping (same convention as MCSSServer.status)
+    status: number; // 0=offline, 1=running, 3=starting, 4=stopping
+    isMcOnline?: boolean;
 }
 
 const DEFAULT_BASE_URL = 'https://server-manfredonia.ddns.net:25560';
@@ -212,7 +213,8 @@ export class MCSSService {
                 onlinePlayers: get('playersOnline', 'onlinePlayers', 'OnlinePlayers', 'PlayersOnline', 'players') ?? 0,
                 maxPlayers: get('playerLimit', 'maxPlayers', 'MaxPlayers', 'PlayerLimit', 'max_players') ?? 0,
                 uptime: formattedUptime,
-                status
+                status,
+                isMcOnline: status === 1
             };
         } catch (err: any) {
             if (!SILENT_ERRORS) {

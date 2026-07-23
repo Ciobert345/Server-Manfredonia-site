@@ -211,9 +211,8 @@ export class PterodactylService {
 
             let onlinePlayers = 0;
             let maxPlayers = 0;
-            // Only worth pinging the Minecraft process once it's actually running —
-            // during starting/stopping/offline it won't respond anyway, so skip it
-            // to avoid an unnecessary timeout on every poll during those states.
+            let isMcOnline = false;
+
             if (status === 1) {
                 try {
                     const mcResponse = await fetch('/.netlify/functions/pterodactyl-mcstatus', {
@@ -225,12 +224,12 @@ export class PterodactylService {
                     });
                     if (mcResponse.ok) {
                         const mcData = await mcResponse.json();
+                        isMcOnline = !!mcData?.online;
                         onlinePlayers = mcData?.onlinePlayers ?? 0;
                         maxPlayers = mcData?.maxPlayers ?? 0;
                     }
                 } catch {
-                    // Minecraft server unreachable — fall back to 0/0 silently,
-                    // the CPU/RAM/uptime stats above are still valid and returned.
+                    isMcOnline = false;
                 }
             }
 
@@ -240,7 +239,8 @@ export class PterodactylService {
                 onlinePlayers,
                 maxPlayers,
                 uptime: formattedUptime,
-                status, // 0=offline, 1=running, 3=starting, 4=stopping
+                status,
+                isMcOnline
             };
         } catch (err: any) {
             if (!SILENT_ERRORS) {

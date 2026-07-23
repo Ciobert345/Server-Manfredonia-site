@@ -90,10 +90,12 @@ export const MobileDashboardCard: React.FC = () => {
 
                 if (pendingTransition) {
                     const elapsed = Date.now() - pendingTransition.startedAt;
-                    if (elapsed > 30000) {
+                    const isMcServerReady = currentStatus === 1 && (serverStats?.isMcOnline === true || (serverStats?.onlinePlayers ?? 0) > 0 || (serverStats?.uptime && serverStats?.uptime !== '00:00:00'));
+
+                    if (elapsed > 45000) {
                         setPendingTransition(null);
                     } else if (pendingTransition.targetOnline) {
-                        if (currentStatus === 1) {
+                        if (isMcServerReady) {
                             setPendingTransition(null);
                             finalStatusText = 'ONLINE';
                             isOnline = true;
@@ -102,7 +104,7 @@ export const MobileDashboardCard: React.FC = () => {
                             isOnline = false;
                         }
                     } else {
-                        if (currentStatus === 0) {
+                        if (currentStatus === 0 && elapsed > 3500) {
                             setPendingTransition(null);
                             finalStatusText = 'OFFLINE';
                             isOnline = false;
