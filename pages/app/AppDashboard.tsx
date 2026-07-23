@@ -85,26 +85,37 @@ const AppDashboard: React.FC = () => {
                 };
 
                 const effectiveStatus = stats.status ?? server?.status ?? 0;
-                let statusText = statusMap[effectiveStatus] || 'UNKNOWN';
+                let finalStatusText = statusMap[effectiveStatus] || 'UNKNOWN';
+                let isOnline = effectiveStatus === 1;
 
                 if (pendingTransition) {
                     const elapsed = Date.now() - pendingTransition.startedAt;
-                    const minDisplayPassed = elapsed > 2500;
-
-                    if (pendingTransition.targetOnline && effectiveStatus === 1 && minDisplayPassed) {
+                    if (elapsed > 30000) {
                         setPendingTransition(null);
-                    } else if (!pendingTransition.targetOnline && effectiveStatus === 0 && minDisplayPassed) {
-                        setPendingTransition(null);
-                    } else if (effectiveStatus === 3 || effectiveStatus === 4) {
-                        statusText = statusMap[effectiveStatus];
+                    } else if (pendingTransition.targetOnline) {
+                        if (effectiveStatus === 1) {
+                            setPendingTransition(null);
+                            finalStatusText = 'ONLINE';
+                            isOnline = true;
+                        } else {
+                            finalStatusText = 'STARTING';
+                            isOnline = false;
+                        }
                     } else {
-                        statusText = pendingTransition.statusText;
+                        if (effectiveStatus === 0) {
+                            setPendingTransition(null);
+                            finalStatusText = 'OFFLINE';
+                            isOnline = false;
+                        } else {
+                            finalStatusText = 'STOPPING';
+                            isOnline = false;
+                        }
                     }
                 }
 
                 setServerStatus({
-                    online: effectiveStatus === 1,
-                    statusText,
+                    online: isOnline,
+                    statusText: finalStatusText,
                     cpu: stats.cpuUsage,
                     ram: stats.ramUsage,
                     players: { online: stats.onlinePlayers, max: stats.maxPlayers },
@@ -115,11 +126,13 @@ const AppDashboard: React.FC = () => {
             }
         } catch (err: any) {
             if (pendingTransition) {
-                setServerStatus(prev => ({
-                    ...prev,
-                    statusText: pendingTransition.statusText,
-                    isUnreachable: false
-                }));
+                const elapsed = Date.now() - pendingTransition.startedAt;
+                if (elapsed > 30000) {
+                    setPendingTransition(null);
+                    setServerStatus(prev => ({ ...prev, isUnreachable: true, statusText: 'UNREACHABLE' }));
+                } else {
+                    setServerStatus(prev => ({ ...prev, statusText: pendingTransition.statusText, isUnreachable: false }));
+                }
             } else {
                 setServerStatus(prev => ({
                     ...prev,

@@ -85,28 +85,39 @@ export const MobileDashboardCard: React.FC = () => {
                     0: 'OFFLINE', 1: 'ONLINE', 2: 'RESTARTING', 3: 'STARTING', 4: 'STOPPING'
                 };
 
-                let statusText = statusMap[currentStatus] || 'UNKNOWN';
+                let finalStatusText = statusMap[currentStatus] || 'UNKNOWN';
+                let isOnline = currentStatus === 1;
 
                 if (pendingTransition) {
                     const elapsed = Date.now() - pendingTransition.startedAt;
-                    const minDisplayPassed = elapsed > 2500;
-
-                    if (pendingTransition.targetOnline && currentStatus === 1 && minDisplayPassed) {
+                    if (elapsed > 30000) {
                         setPendingTransition(null);
-                    } else if (!pendingTransition.targetOnline && currentStatus === 0 && minDisplayPassed) {
-                        setPendingTransition(null);
-                    } else if (currentStatus === 3 || currentStatus === 4) {
-                        statusText = statusMap[currentStatus];
+                    } else if (pendingTransition.targetOnline) {
+                        if (currentStatus === 1) {
+                            setPendingTransition(null);
+                            finalStatusText = 'ONLINE';
+                            isOnline = true;
+                        } else {
+                            finalStatusText = 'STARTING';
+                            isOnline = false;
+                        }
                     } else {
-                        statusText = pendingTransition.statusText;
+                        if (currentStatus === 0) {
+                            setPendingTransition(null);
+                            finalStatusText = 'OFFLINE';
+                            isOnline = false;
+                        } else {
+                            finalStatusText = 'STOPPING';
+                            isOnline = false;
+                        }
                     }
                 }
 
                 consecutiveFails.current = 0; // Success: reset threshold
                 setStats({
-                    online: currentStatus === 1,
+                    online: isOnline,
                     status: currentStatus,
-                    statusText,
+                    statusText: finalStatusText,
                     cpu: serverStats?.cpuUsage ?? 0,
                     ram: serverStats?.ramUsage ?? 0,
                     players: { online: serverStats?.onlinePlayers ?? 0, max: serverStats?.maxPlayers ?? 20 },
@@ -116,7 +127,13 @@ export const MobileDashboardCard: React.FC = () => {
             }
         } catch (err: any) {
             if (pendingTransition) {
-                setStats(prev => ({ ...prev, statusText: pendingTransition.statusText, unreachable: false }));
+                const elapsed = Date.now() - pendingTransition.startedAt;
+                if (elapsed > 30000) {
+                    setPendingTransition(null);
+                    setStats(prev => ({ ...prev, statusText: 'LOSS_SYNC', unreachable: true }));
+                } else {
+                    setStats(prev => ({ ...prev, statusText: pendingTransition.statusText, unreachable: false }));
+                }
             } else {
                 setStats(prev => ({ ...prev, statusText: 'LOSS_SYNC', unreachable: true }));
             }
