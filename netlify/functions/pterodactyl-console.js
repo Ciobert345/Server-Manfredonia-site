@@ -79,7 +79,7 @@ export const handler = async (event) => {
     // Step 2: Connect via native Node.js net/tls (no external deps)
     let wsResult = { logs: [], error: null };
     try {
-        wsResult = await collectLogsNative(socketUrl, token, 5000);
+        wsResult = await collectLogsNative(socketUrl, token, 9000);
     } catch (err) {
         wsResult.error = err.message;
     }
@@ -137,27 +137,43 @@ function httpGetJson(url, apiKey) {
     });
 }
 
+/**
+ * Builds an RFC 6455-compliant CLIENT->SERVER WebSocket frame.
+ * Per spec, every frame sent BY A CLIENT MUST be masked with a random
+ * 4-byte key, and the payload MUST be XORed against it byte-by-byte.
+ * Servers are allowed (and many, including Wings, do) to silently
+ * DROP any client frame that arrives unmasked — no error, just nothing
+ * happens, which is exactly the "handshake ok but zero output" symptom.
+ */
 function sendWsFrame(socket, text) {
     try {
         const payload = Buffer.from(text, 'utf8');
         const len = payload.length;
+
         let header;
         if (len < 126) {
             header = Buffer.alloc(2);
-            header[0] = 0x81;
-            header[1] = len;
+            header[0] = 0x81; // FIN + text frame opcode
+            header[1] = 0x80 | len; // MASK bit set + length
         } else if (len < 65536) {
             header = Buffer.alloc(4);
             header[0] = 0x81;
-            header[1] = 126;
+            header[1] = 0x80 | 126;
             header.writeUInt16BE(len, 2);
         } else {
             header = Buffer.alloc(10);
             header[0] = 0x81;
-            header[1] = 127;
+            header[1] = 0x80 | 127;
             header.writeBigUInt64BE(BigInt(len), 2);
         }
-        socket.write(Buffer.concat([header, payload]));
+
+        const maskKey = randomBytes(4);
+        const maskedPayload = Buffer.alloc(len);
+        for (let i = 0; i < len; i++) {
+            maskedPayload[i] = payload[i] ^ maskKey[i % 4];
+        }
+
+        socket.write(Buffer.concat([header, maskKey, maskedPayload]));
     } catch { }
 }
 
@@ -195,7 +211,6 @@ function collectLogsNative(socketUrl, token, timeoutMs) {
         const port = parseInt(parsedUrl.port) || (isSecure ? 443 : 80);
         const path = (parsedUrl.pathname || '/') + (parsedUrl.search || '');
 
-        // Static import used here — no dynamic await import() needed
         const wsKey = randomBytes(16).toString('base64');
 
         const upgradeRequest = [
@@ -235,7 +250,7 @@ function collectLogsNative(socketUrl, token, timeoutMs) {
                 buffer = Buffer.concat([buffer, chunk]);
             }
 
-            // Parse WebSocket frames
+            // Parse WebSocket frames (server->client frames are NOT masked)
             while (buffer.length >= 2) {
                 const firstByte = buffer[0];
                 const secondByte = buffer[1];
@@ -267,6 +282,8 @@ function collectLogsNative(socketUrl, token, timeoutMs) {
                             const rawLog = msg.args?.[0] || '';
                             const clean = rawLog.replace(/\x1B\[[0-9;]*[a-zA-Z]/g, '').trimEnd();
                             if (clean) logs.push(clean);
+                        } else if (msg.event === 'token expiring' || msg.event === 'token expired') {
+                            // Not handled here: a single short-lived poll doesn't need refresh
                         }
                     } catch { }
                 } else if (opcode === 8) {

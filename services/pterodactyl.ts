@@ -17,7 +17,7 @@ export class PterodactylService {
 
     constructor(apiKey: string, baseUrl: string = DEFAULT_BASE_URL) {
         this.apiKey = apiKey ? apiKey.trim() : '';
-        
+
         let cleanUrl = baseUrl ? baseUrl.trim() : DEFAULT_BASE_URL;
         if (cleanUrl.endsWith('/')) cleanUrl = cleanUrl.slice(0, -1);
         if (cleanUrl.endsWith('/api/client')) cleanUrl = cleanUrl.slice(0, -11);
@@ -251,9 +251,10 @@ export class PterodactylService {
             window.location.protocol === 'static-rocket:' ||
             window.location.protocol === 'capacitor:';
 
-        // Throttle: only poll every 5 seconds max
+        // Throttle: only poll every 12 seconds max (avoids Panel API rate limiting,
+        // especially when stats polling is also hitting the same rate limit bucket)
         const lastPoll = this.lastPolledAt.get(serverId) || 0;
-        if (Date.now() - lastPoll < 5000) {
+        if (Date.now() - lastPoll < 12000) {
             return (this.consoleLogsMap.get(serverId) || []).slice(-amountOfLines);
         }
         this.lastPolledAt.set(serverId, Date.now());
