@@ -252,12 +252,11 @@ export class PterodactylService {
             window.location.protocol === 'static-rocket:' ||
             window.location.protocol === 'capacitor:';
 
-        // Throttle: only poll every 3 seconds max. This is safe now because the
-        // WS token is cached and reused across polls — only the first poll (or
-        // one after the cached token expires) hits the Panel's rate-limited
-        // /websocket REST endpoint; every other poll talks to Wings directly.
+        // Throttle: only poll every 1.5 seconds max. Safe because the WS token
+        // is cached (no rate-limited Panel call on most polls) and each call now
+        // returns as soon as output stops flowing, not after a fixed wait.
         const lastPoll = this.lastPolledAt.get(serverId) || 0;
-        if (Date.now() - lastPoll < 3000) {
+        if (Date.now() - lastPoll < 1500) {
             return (this.consoleLogsMap.get(serverId) || []).slice(-amountOfLines);
         }
         this.lastPolledAt.set(serverId, Date.now());

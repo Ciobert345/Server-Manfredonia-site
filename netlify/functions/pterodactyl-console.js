@@ -210,15 +210,29 @@ function collectLogsNative(socketUrl, token, timeoutMs) {
         let wsHandshakeDone = false;
         let httpResponseBuf = '';
         let authOk = false;
+        let idleTimer = null;
 
         const finish = (errMsg) => {
             if (finished) return;
             finished = true;
+            if (idleTimer) clearTimeout(idleTimer);
             try { socket.destroy(); } catch { }
             resolve({ logs, error: errMsg || null, authOk });
         };
 
+        // Hard cap: never wait longer than this no matter what.
         const deadline = setTimeout(() => finish(null), timeoutMs);
+
+        // Once console output starts flowing, resolve shortly after it stops
+        // instead of always waiting for the full deadline — this is what makes
+        // polling feel responsive instead of always taking ~timeoutMs per call.
+        const armIdleTimer = () => {
+            if (idleTimer) clearTimeout(idleTimer);
+            idleTimer = setTimeout(() => {
+                clearTimeout(deadline);
+                finish(null);
+            }, 400);
+        };
 
         let parsedUrl;
         try {
@@ -301,10 +315,12 @@ function collectLogsNative(socketUrl, token, timeoutMs) {
                         if (msg.event === 'auth success') {
                             authOk = true;
                             sendWsFrame(socket, JSON.stringify({ event: 'send logs', args: [] }));
+                            armIdleTimer(); // in case there's no output at all (idle server)
                         } else if (msg.event === 'console output') {
                             const rawLog = msg.args?.[0] || '';
                             const clean = rawLog.replace(/\x1B\[[0-9;]*[a-zA-Z]/g, '').trimEnd();
                             if (clean) logs.push(clean);
+                            armIdleTimer(); // reset the idle window on every new line
                         } else if (msg.event === 'token expiring' || msg.event === 'token expired') {
                             // Not handled here: a single short-lived poll doesn't need refresh
                         }
