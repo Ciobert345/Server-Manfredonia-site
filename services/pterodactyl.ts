@@ -1,7 +1,7 @@
 import { MCSSServer, MCSSStats } from './mcss';
 
 const DEFAULT_BASE_URL = 'https://panel.example.com';
-const SILENT_ERRORS = false;
+const SILENT_ERRORS = true;
 
 export interface PterodactylWebsocketData {
     token: string;
