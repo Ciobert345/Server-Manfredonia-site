@@ -38,7 +38,7 @@ const Dashboard: React.FC = () => {
   const buildRef = '1.2.0-TAC';
   const geoCoords = { lat: 41.8, lon: 15.9 };
 
-  const [pendingTransition, setPendingTransition] = useState<{ statusText: string; targetOnline: boolean } | null>(null);
+  const [pendingTransition, setPendingTransition] = useState<{ statusText: string; targetOnline: boolean; startedAt: number } | null>(null);
 
   const addLog = useCallback((tag: string, msg: string, color?: string) => {
     const time = new Date().toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
@@ -74,9 +74,12 @@ const Dashboard: React.FC = () => {
         let statusText = statusMap[effectiveStatus] || 'UNKNOWN';
 
         if (pendingTransition) {
-          if (pendingTransition.targetOnline && effectiveStatus === 1) {
+          const elapsed = Date.now() - pendingTransition.startedAt;
+          const minDisplayPassed = elapsed > 2500;
+
+          if (pendingTransition.targetOnline && effectiveStatus === 1 && minDisplayPassed) {
             setPendingTransition(null);
-          } else if (!pendingTransition.targetOnline && effectiveStatus === 0) {
+          } else if (!pendingTransition.targetOnline && effectiveStatus === 0 && minDisplayPassed) {
             setPendingTransition(null);
           } else if (effectiveStatus === 3 || effectiveStatus === 4) {
             statusText = statusMap[effectiveStatus];
@@ -96,12 +99,19 @@ const Dashboard: React.FC = () => {
         });
       }
     } catch (err: any) {
-      // console.warn('❌ [DASHBOARD] MCSS Uplink Failed:', err.message || err);
-      setServerStatus(prev => ({
-        ...prev,
-        isUnreachable: true,
-        statusText: 'UNREACHABLE'
-      }));
+      if (pendingTransition) {
+        setServerStatus(prev => ({
+          ...prev,
+          statusText: pendingTransition.statusText,
+          isUnreachable: false
+        }));
+      } else {
+        setServerStatus(prev => ({
+          ...prev,
+          isUnreachable: true,
+          statusText: 'UNREACHABLE'
+        }));
+      }
     }
   }, [mcssService, serverId, pendingTransition]);
 
@@ -128,8 +138,7 @@ const Dashboard: React.FC = () => {
   useEffect(() => {
     if (!user || loading) return;
 
-    // Aggressive Backoff: If unreachable, poll much slower (5 mins) to avoid console noise
-    const intervalTime = serverStatus.isUnreachable ? 300000 : 5000;
+    const intervalTime = pendingTransition ? 2000 : (serverStatus.isUnreachable ? 300000 : 5000);
 
     const interval = setInterval(() => {
       if (mcssService) {
@@ -143,7 +152,7 @@ const Dashboard: React.FC = () => {
       }
     }, intervalTime);
     return () => clearInterval(interval);
-  }, [mcssService, user, loading, authLoading, fetchDetailedStats, serverStatus.isUnreachable]);
+  }, [mcssService, user, loading, authLoading, fetchDetailedStats, serverStatus.isUnreachable, pendingTransition]);
 
   useEffect(() => {
     // Only open the modal if we are definitely NOT loading and definitely NOT logged in
@@ -159,21 +168,21 @@ const Dashboard: React.FC = () => {
 
     const isStart = action === 'Start' || action === 'Restart';
     const isStop = action === 'Stop' || action === 'Kill';
+    const now = Date.now();
 
     if (isStart) {
-      setPendingTransition({ statusText: 'STARTING', targetOnline: true });
-      setServerStatus(prev => ({ ...prev, statusText: 'STARTING', online: false }));
+      setPendingTransition({ statusText: 'STARTING', targetOnline: true, startedAt: now });
+      setServerStatus(prev => ({ ...prev, statusText: 'STARTING', online: false, isUnreachable: false }));
     } else if (isStop) {
-      setPendingTransition({ statusText: 'STOPPING', targetOnline: false });
-      setServerStatus(prev => ({ ...prev, statusText: 'STOPPING', online: false }));
+      setPendingTransition({ statusText: 'STOPPING', targetOnline: false, startedAt: now });
+      setServerStatus(prev => ({ ...prev, statusText: 'STOPPING', online: false, isUnreachable: false }));
     }
 
     addLog('CMD:', `Exec ${action.toUpperCase()}...`, 'text-orange-400');
     try {
       await mcssService.executeAction(serverId, action);
       addLog('OK:', `${action.toUpperCase()} acknowledge.`, 'text-emerald-400');
-      await new Promise(resolve => setTimeout(resolve, 1500));
-      await fetchDetailedStats();
+      fetchDetailedStats();
     } catch (err: any) {
       setPendingTransition(null);
       addLog('ERR:', `Failed: ${err.message}`, 'text-red-400');

@@ -14,7 +14,7 @@ const AppDashboard: React.FC = () => {
     const [serverName, setServerName] = useState<string>('MANFREDONIA');
     const [actionLoading, setActionLoading] = useState<string | null>(null);
     const [gracePassed, setGracePassed] = useState(false);
-    const [pendingTransition, setPendingTransition] = useState<{ statusText: string; targetOnline: boolean } | null>(null);
+    const [pendingTransition, setPendingTransition] = useState<{ statusText: string; targetOnline: boolean; startedAt: number } | null>(null);
     const [loading, setLoading] = useState(true);
     const [logs, setLogs] = useState<{ time: string; tag: string; msg: string; color?: string }[]>([]);
 
@@ -88,9 +88,12 @@ const AppDashboard: React.FC = () => {
                 let statusText = statusMap[effectiveStatus] || 'UNKNOWN';
 
                 if (pendingTransition) {
-                    if (pendingTransition.targetOnline && effectiveStatus === 1) {
+                    const elapsed = Date.now() - pendingTransition.startedAt;
+                    const minDisplayPassed = elapsed > 2500;
+
+                    if (pendingTransition.targetOnline && effectiveStatus === 1 && minDisplayPassed) {
                         setPendingTransition(null);
-                    } else if (!pendingTransition.targetOnline && effectiveStatus === 0) {
+                    } else if (!pendingTransition.targetOnline && effectiveStatus === 0 && minDisplayPassed) {
                         setPendingTransition(null);
                     } else if (effectiveStatus === 3 || effectiveStatus === 4) {
                         statusText = statusMap[effectiveStatus];
@@ -111,11 +114,19 @@ const AppDashboard: React.FC = () => {
                 addLog('UP:', 'Uplink Synchronized', 'text-emerald-500/60');
             }
         } catch (err: any) {
-            setServerStatus(prev => ({
-                ...prev,
-                isUnreachable: true,
-                statusText: 'UNREACHABLE'
-            }));
+            if (pendingTransition) {
+                setServerStatus(prev => ({
+                    ...prev,
+                    statusText: pendingTransition.statusText,
+                    isUnreachable: false
+                }));
+            } else {
+                setServerStatus(prev => ({
+                    ...prev,
+                    isUnreachable: true,
+                    statusText: 'UNREACHABLE'
+                }));
+            }
             addLog('ERR:', `Uplink Fail: ${err.message}`, 'text-red-500');
         }
     }, [mcssService, serverId, addLog, pendingTransition]);
@@ -169,13 +180,13 @@ const AppDashboard: React.FC = () => {
     useEffect(() => {
         if (!user || loading || !mcssService) return;
 
-        const intervalTime = serverStatus.isUnreachable ? 15000 : 5000;
+        const intervalTime = pendingTransition ? 2000 : (serverStatus.isUnreachable ? 15000 : 5000);
         const interval = setInterval(() => {
             fetchDetailedStats();
         }, intervalTime);
 
         return () => clearInterval(interval);
-    }, [mcssService, user, loading, fetchDetailedStats, serverStatus.isUnreachable]);
+    }, [mcssService, user, loading, fetchDetailedStats, serverStatus.isUnreachable, pendingTransition]);
 
     const handleServerAction = async (action: string) => {
         if (!mcssService || !serverId || actionLoading) return;
@@ -183,13 +194,14 @@ const AppDashboard: React.FC = () => {
 
         const isStart = action === 'Start' || action === 'Restart';
         const isStop = action === 'Stop' || action === 'Kill';
+        const now = Date.now();
 
         if (isStart) {
-            setPendingTransition({ statusText: 'STARTING', targetOnline: true });
-            setServerStatus(prev => ({ ...prev, statusText: 'STARTING', online: false }));
+            setPendingTransition({ statusText: 'STARTING', targetOnline: true, startedAt: now });
+            setServerStatus(prev => ({ ...prev, statusText: 'STARTING', online: false, isUnreachable: false }));
         } else if (isStop) {
-            setPendingTransition({ statusText: 'STOPPING', targetOnline: false });
-            setServerStatus(prev => ({ ...prev, statusText: 'STOPPING', online: false }));
+            setPendingTransition({ statusText: 'STOPPING', targetOnline: false, startedAt: now });
+            setServerStatus(prev => ({ ...prev, statusText: 'STOPPING', online: false, isUnreachable: false }));
         }
 
         addLog('CMD:', `Exec ${action.toUpperCase()}`, 'text-orange-400');
@@ -197,8 +209,7 @@ const AppDashboard: React.FC = () => {
             await Haptics.impact({ style: ImpactStyle.Heavy });
             await mcssService.executeAction(serverId, action);
             addLog('OK:', `${action.toUpperCase()} acknowledge`, 'text-emerald-400');
-            await new Promise(resolve => setTimeout(resolve, 1500));
-            await fetchDetailedStats();
+            fetchDetailedStats();
             await Haptics.notification({ type: 'SUCCESS' as any });
         } catch (err: any) {
             setPendingTransition(null);

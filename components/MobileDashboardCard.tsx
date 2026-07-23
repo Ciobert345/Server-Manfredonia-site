@@ -54,7 +54,7 @@ export const MobileDashboardCard: React.FC = () => {
         setMounted(true);
     }, []);
 
-    const [pendingTransition, setPendingTransition] = useState<{ statusText: string; targetOnline: boolean } | null>(null);
+    const [pendingTransition, setPendingTransition] = useState<{ statusText: string; targetOnline: boolean; startedAt: number } | null>(null);
 
     const fetchStats = useCallback(async () => {
         if (!mcssService) return;
@@ -88,9 +88,12 @@ export const MobileDashboardCard: React.FC = () => {
                 let statusText = statusMap[currentStatus] || 'UNKNOWN';
 
                 if (pendingTransition) {
-                    if (pendingTransition.targetOnline && currentStatus === 1) {
+                    const elapsed = Date.now() - pendingTransition.startedAt;
+                    const minDisplayPassed = elapsed > 2500;
+
+                    if (pendingTransition.targetOnline && currentStatus === 1 && minDisplayPassed) {
                         setPendingTransition(null);
-                    } else if (!pendingTransition.targetOnline && currentStatus === 0) {
+                    } else if (!pendingTransition.targetOnline && currentStatus === 0 && minDisplayPassed) {
                         setPendingTransition(null);
                     } else if (currentStatus === 3 || currentStatus === 4) {
                         statusText = statusMap[currentStatus];
@@ -112,20 +115,23 @@ export const MobileDashboardCard: React.FC = () => {
                 });
             }
         } catch (err: any) {
-            setStats(prev => ({ ...prev, statusText: 'LOSS_SYNC', unreachable: true }));
+            if (pendingTransition) {
+                setStats(prev => ({ ...prev, statusText: pendingTransition.statusText, unreachable: false }));
+            } else {
+                setStats(prev => ({ ...prev, statusText: 'LOSS_SYNC', unreachable: true }));
+            }
         }
     }, [mcssService, serverId, pendingTransition]);
 
     useEffect(() => {
         fetchStats();
-        // Aggressive Backoff: If unreachable, poll much slower (5 mins) to avoid console noise
-        const intervalTime = stats.unreachable ? 300000 : 5000;
+        const intervalTime = pendingTransition ? 2000 : (stats.unreachable ? 300000 : 5000);
         const interval = setInterval(fetchStats, intervalTime);
 
         return () => {
             clearInterval(interval);
         };
-    }, [fetchStats, stats.unreachable]);
+    }, [fetchStats, stats.unreachable, pendingTransition]);
 
     // gracePassed is now triggered by the loading bar's onAnimationComplete
     // to ensure perfect synchronization with the visual progress.
@@ -146,9 +152,9 @@ export const MobileDashboardCard: React.FC = () => {
         };
 
         if (!stats.unreachable) fetchConsole();
-        const interval = setInterval(fetchConsole, 2000);
+        const interval = setInterval(fetchConsole, 3000);
         return () => clearInterval(interval);
-    }, [mcssService, serverId, activeTab]);
+    }, [mcssService, serverId, activeTab, stats.unreachable]);
 
     // Track if we should auto-scroll
     const shouldAutoScrollRef = useRef(true);
@@ -231,19 +237,19 @@ export const MobileDashboardCard: React.FC = () => {
 
         const isStart = action === 'Start' || action === 'Restart';
         const isStop = action === 'Stop' || action === 'Kill';
+        const now = Date.now();
 
         if (isStart) {
-            setPendingTransition({ statusText: 'STARTING', targetOnline: true });
-            setStats(prev => ({ ...prev, statusText: 'STARTING', online: false, status: 3 }));
+            setPendingTransition({ statusText: 'STARTING', targetOnline: true, startedAt: now });
+            setStats(prev => ({ ...prev, statusText: 'STARTING', online: false, status: 3, unreachable: false }));
         } else if (isStop) {
-            setPendingTransition({ statusText: 'STOPPING', targetOnline: false });
-            setStats(prev => ({ ...prev, statusText: 'STOPPING', online: false, status: 4 }));
+            setPendingTransition({ statusText: 'STOPPING', targetOnline: false, startedAt: now });
+            setStats(prev => ({ ...prev, statusText: 'STOPPING', online: false, status: 4, unreachable: false }));
         }
 
         try {
             await mcssService.executeAction(serverId, action);
-            await new Promise(r => setTimeout(r, 1500));
-            await fetchStats();
+            fetchStats();
         } catch (err) {
             setPendingTransition(null);
             addNotification('error', `Failed to execute ${action}`);
