@@ -13,6 +13,7 @@ export interface MCSSStats {
     onlinePlayers: number;
     maxPlayers: number;
     uptime: string;
+    status?: number;
 }
 
 const DEFAULT_BASE_URL = 'https://server-manfredonia.ddns.net:25560';
