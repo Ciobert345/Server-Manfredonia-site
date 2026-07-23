@@ -153,16 +153,18 @@ export class PterodactylService {
     async getServers(): Promise<MCSSServer[]> {
         try {
             const data = await this.fetchApi('/api/client');
-            const items = data?.data || [];
+            const items = data?.data || (Array.isArray(data) ? data : []);
 
             const serverPromises = items.map(async (item: any) => {
-                const attr = item.attributes || {};
-                const identifier = attr.identifier || attr.uuid || '';
+                const attr = item?.attributes || item?.data?.attributes || item || {};
+                const identifier = attr.identifier || attr.uuid || item.id || '';
 
                 let statusCode = 0; // Default to offline if resource check fails or is pending
                 try {
                     const resData = await this.fetchApi(`/api/client/servers/${identifier}/resources`);
-                    statusCode = mapCurrentState(resData?.attributes?.current_state);
+                    const resAttr = resData?.attributes || resData?.data?.attributes || resData?.data || resData || {};
+                    const state = resAttr.current_state || resAttr.state;
+                    statusCode = mapCurrentState(state);
                 } catch {
                     // Ignore resource check error for single server
                 }
@@ -188,14 +190,14 @@ export class PterodactylService {
     async getServerStats(serverId: string): Promise<MCSSStats> {
         try {
             const data = await this.fetchApi(`/api/client/servers/${serverId}/resources`);
-            const attributes = data?.attributes || {};
-            const resources = attributes.resources || {};
+            const attributes = data?.attributes || data?.data?.attributes || data?.data || data || {};
+            const resources = attributes.resources || data?.resources || {};
 
-            const memoryBytes = resources.memory_bytes || 0;
-            const cpuUsage = Math.round((resources.cpu_absolute || 0) * 10) / 10;
+            const memoryBytes = resources.memory_bytes ?? attributes.memory_bytes ?? 0;
+            const cpuUsage = Math.round((resources.cpu_absolute ?? attributes.cpu_absolute ?? 0) * 10) / 10;
             const memoryMb = Math.round(memoryBytes / (1024 * 1024));
 
-            const rawUptime = Math.floor((resources.uptime || 0) / 1000);
+            const rawUptime = Math.floor((resources.uptime ?? attributes.uptime ?? 0) / 1000);
             let formattedUptime = '00:00:00';
             if (rawUptime > 0) {
                 const hours = Math.floor(rawUptime / 3600);
@@ -204,7 +206,7 @@ export class PterodactylService {
                 formattedUptime = [hours, minutes, seconds].map(v => v.toString().padStart(2, '0')).join(':');
             }
 
-            const state = attributes.current_state;
+            const state = attributes.current_state || attributes.state || data?.current_state || data?.state;
             const status = mapCurrentState(state);
 
             let onlinePlayers = 0;
@@ -238,7 +240,7 @@ export class PterodactylService {
                 onlinePlayers,
                 maxPlayers,
                 uptime: formattedUptime,
-                status, // 0=offline, 1=running, 3=starting, 4=stopping — add this field to MCSSStats if not already present
+                status, // 0=offline, 1=running, 3=starting, 4=stopping
             };
         } catch (err: any) {
             if (!SILENT_ERRORS) {
