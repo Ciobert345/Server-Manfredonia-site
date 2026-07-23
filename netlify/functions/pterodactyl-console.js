@@ -35,8 +35,8 @@ export const handler = async (event) => {
         rawWsData = await httpGetJson(wsCredsUrl, apiKey);
         // Pterodactyl returns {data: {token, socket}} (NOT {attributes: {token, socket}})
         const attr = rawWsData?.attributes ||
-                     rawWsData?.data?.attributes ||
-                     rawWsData?.data || {};
+            rawWsData?.data?.attributes ||
+            rawWsData?.data || {};
         token = attr.token;
         socketUrl = attr.socket;
 
@@ -122,7 +122,7 @@ function httpGetJson(url, apiKey) {
                         try {
                             const errData = JSON.parse(data);
                             detail = errData?.errors?.[0]?.detail || errData?.error || detail;
-                        } catch {}
+                        } catch { }
                         reject(new Error(detail));
                     }
                 });
@@ -158,7 +158,7 @@ function sendWsFrame(socket, text) {
             header.writeBigUInt64BE(BigInt(len), 2);
         }
         socket.write(Buffer.concat([header, payload]));
-    } catch {}
+    } catch { }
 }
 
 /**
@@ -176,7 +176,7 @@ function collectLogsNative(socketUrl, token, timeoutMs) {
         const finish = (errMsg) => {
             if (finished) return;
             finished = true;
-            try { socket.destroy(); } catch {}
+            try { socket.destroy(); } catch { }
             resolve({ logs, error: errMsg || null });
         };
 
@@ -205,6 +205,7 @@ function collectLogsNative(socketUrl, token, timeoutMs) {
             `Connection: Upgrade`,
             `Sec-WebSocket-Key: ${wsKey}`,
             `Sec-WebSocket-Version: 13`,
+            `Origin: https://server-manfredonia.netlify.app`,
             `\r\n`
         ].join('\r\n');
 
@@ -267,7 +268,7 @@ function collectLogsNative(socketUrl, token, timeoutMs) {
                             const clean = rawLog.replace(/\x1B\[[0-9;]*[a-zA-Z]/g, '').trimEnd();
                             if (clean) logs.push(clean);
                         }
-                    } catch {}
+                    } catch { }
                 } else if (opcode === 8) {
                     // Connection close frame
                     clearTimeout(deadline);
