@@ -18,6 +18,10 @@ export const handler = async (event) => {
     const baseUrl = (event.headers['pterodactyl-base-url'] || '').trim().replace(/\/$/, '');
     const apiKey = (event.headers['pterodactyl-api-key'] || '').trim();
     const serverId = (event.headers['pterodactyl-server-id'] || '').trim();
+    // Optional: frontend can pass a previously-obtained token/socket to skip
+    // the rate-limited Panel REST call on every single poll.
+    const cachedToken = (event.headers['pterodactyl-ws-token'] || '').trim();
+    const cachedSocket = (event.headers['pterodactyl-ws-socket'] || '').trim();
 
     if (!baseUrl || !apiKey || !serverId) {
         return {
@@ -27,42 +31,51 @@ export const handler = async (event) => {
         };
     }
 
-    // Step 1: Get WebSocket credentials via REST (server-side, no Mixed Content issues)
-    const wsCredsUrl = `${baseUrl}/api/client/servers/${serverId}/websocket`;
     let token, socketUrl, rawWsData;
+    let credentialsRefreshed = false;
 
-    try {
-        rawWsData = await httpGetJson(wsCredsUrl, apiKey);
-        // Pterodactyl returns {data: {token, socket}} (NOT {attributes: {token, socket}})
-        const attr = rawWsData?.attributes ||
-            rawWsData?.data?.attributes ||
-            rawWsData?.data || {};
-        token = attr.token;
-        socketUrl = attr.socket;
+    if (cachedToken && cachedSocket) {
+        // Reuse credentials supplied by the frontend — no REST call to the Panel here,
+        // so this path never counts against the Panel's API rate limit.
+        token = cachedToken;
+        socketUrl = cachedSocket;
+    } else {
+        // Step 1: Get WebSocket credentials via REST (server-side, no Mixed Content issues)
+        const wsCredsUrl = `${baseUrl}/api/client/servers/${serverId}/websocket`;
+        try {
+            rawWsData = await httpGetJson(wsCredsUrl, apiKey);
+            // Pterodactyl returns {data: {token, socket}} (NOT {attributes: {token, socket}})
+            const attr = rawWsData?.attributes ||
+                rawWsData?.data?.attributes ||
+                rawWsData?.data || {};
+            token = attr.token;
+            socketUrl = attr.socket;
+            credentialsRefreshed = true;
 
-        // If Wings FQDN is a private/local IP, replace it with the panel's host
-        // so Netlify can attempt to reach it via the external IP.
-        if (socketUrl) {
-            const panelUrl = new URL(baseUrl);
-            const panelHost = panelUrl.hostname;
-            const isLocalIp = /^(192\.168\.|10\.|172\.(1[6-9]|2[0-9]|3[01])\.)/.test(
-                new URL(socketUrl).hostname
-            );
-            if (isLocalIp && panelHost) {
-                const wsUrl = new URL(socketUrl);
-                wsUrl.hostname = panelHost;
-                socketUrl = wsUrl.toString();
+            // If Wings FQDN is a private/local IP, replace it with the panel's host
+            // so Netlify can attempt to reach it via the external IP.
+            if (socketUrl) {
+                const panelUrl = new URL(baseUrl);
+                const panelHost = panelUrl.hostname;
+                const isLocalIp = /^(192\.168\.|10\.|172\.(1[6-9]|2[0-9]|3[01])\.)/.test(
+                    new URL(socketUrl).hostname
+                );
+                if (isLocalIp && panelHost) {
+                    const wsUrl = new URL(socketUrl);
+                    wsUrl.hostname = panelHost;
+                    socketUrl = wsUrl.toString();
+                }
             }
+        } catch (err) {
+            return {
+                statusCode: 200,
+                headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    logs: [],
+                    debug: { step: 'get_ws_credentials', error: err.message, url: wsCredsUrl }
+                })
+            };
         }
-    } catch (err) {
-        return {
-            statusCode: 200,
-            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                logs: [],
-                debug: { step: 'get_ws_credentials', error: err.message, url: wsCredsUrl }
-            })
-        };
     }
 
     if (!token || !socketUrl) {
@@ -77,19 +90,27 @@ export const handler = async (event) => {
     }
 
     // Step 2: Connect via native Node.js net/tls (no external deps)
-    let wsResult = { logs: [], error: null };
+    let wsResult = { logs: [], error: null, authOk: false };
     try {
-        wsResult = await collectLogsNative(socketUrl, token, 9000);
+        wsResult = await collectLogsNative(socketUrl, token, 4000);
     } catch (err) {
         wsResult.error = err.message;
     }
+
+    // If auth never succeeded and we were using cached credentials, the token
+    // has likely expired — tell the frontend to drop the cache and refetch.
+    const needsRefresh = !wsResult.authOk && !!cachedToken;
 
     return {
         statusCode: 200,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         body: JSON.stringify({
             logs: wsResult.logs,
-            debug: { socketUrl, logsCount: wsResult.logs.length, wsError: wsResult.error || null }
+            // Frontend should cache these on every response so the next poll can reuse them
+            wsToken: token,
+            wsSocket: socketUrl,
+            needsRefresh,
+            debug: { socketUrl, logsCount: wsResult.logs.length, wsError: wsResult.error || null, credentialsRefreshed, authOk: wsResult.authOk }
         })
     };
 };
@@ -188,12 +209,13 @@ function collectLogsNative(socketUrl, token, timeoutMs) {
         let buffer = Buffer.alloc(0);
         let wsHandshakeDone = false;
         let httpResponseBuf = '';
+        let authOk = false;
 
         const finish = (errMsg) => {
             if (finished) return;
             finished = true;
             try { socket.destroy(); } catch { }
-            resolve({ logs, error: errMsg || null });
+            resolve({ logs, error: errMsg || null, authOk });
         };
 
         const deadline = setTimeout(() => finish(null), timeoutMs);
@@ -277,6 +299,7 @@ function collectLogsNative(socketUrl, token, timeoutMs) {
                     try {
                         const msg = JSON.parse(payload.toString('utf8'));
                         if (msg.event === 'auth success') {
+                            authOk = true;
                             sendWsFrame(socket, JSON.stringify({ event: 'send logs', args: [] }));
                         } else if (msg.event === 'console output') {
                             const rawLog = msg.args?.[0] || '';

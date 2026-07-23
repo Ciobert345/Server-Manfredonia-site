@@ -14,6 +14,7 @@ export class PterodactylService {
 
     private consoleLogsMap = new Map<string, string[]>();
     private lastPolledAt = new Map<string, number>();
+    private wsCredsCache = new Map<string, { token: string; socket: string }>();
 
     constructor(apiKey: string, baseUrl: string = DEFAULT_BASE_URL) {
         this.apiKey = apiKey ? apiKey.trim() : '';
@@ -251,10 +252,12 @@ export class PterodactylService {
             window.location.protocol === 'static-rocket:' ||
             window.location.protocol === 'capacitor:';
 
-        // Throttle: only poll every 12 seconds max (avoids Panel API rate limiting,
-        // especially when stats polling is also hitting the same rate limit bucket)
+        // Throttle: only poll every 3 seconds max. This is safe now because the
+        // WS token is cached and reused across polls — only the first poll (or
+        // one after the cached token expires) hits the Panel's rate-limited
+        // /websocket REST endpoint; every other poll talks to Wings directly.
         const lastPoll = this.lastPolledAt.get(serverId) || 0;
-        if (Date.now() - lastPoll < 12000) {
+        if (Date.now() - lastPoll < 3000) {
             return (this.consoleLogsMap.get(serverId) || []).slice(-amountOfLines);
         }
         this.lastPolledAt.set(serverId, Date.now());
@@ -264,13 +267,20 @@ export class PterodactylService {
         if (!isNative) {
             // Web: use the Netlify Function to open WebSocket server-side
             try {
+                const cached = this.wsCredsCache.get(serverId);
+                const headers: Record<string, string> = {
+                    'pterodactyl-base-url': this.baseUrl,
+                    'pterodactyl-api-key': cleanKey,
+                    'pterodactyl-server-id': serverId,
+                };
+                if (cached) {
+                    headers['pterodactyl-ws-token'] = cached.token;
+                    headers['pterodactyl-ws-socket'] = cached.socket;
+                }
+
                 const response = await fetch('/.netlify/functions/pterodactyl-console', {
                     method: 'GET',
-                    headers: {
-                        'pterodactyl-base-url': this.baseUrl,
-                        'pterodactyl-api-key': cleanKey,
-                        'pterodactyl-server-id': serverId,
-                    },
+                    headers,
                 });
 
                 if (response.ok) {
@@ -279,6 +289,16 @@ export class PterodactylService {
                     if (data?.debug) {
                         console.info('[PTERODACTYL CONSOLE DEBUG]', JSON.stringify(data.debug));
                     }
+
+                    // Cache the credentials for the next poll, unless the function
+                    // told us the cached ones had expired (needsRefresh) — in that
+                    // case drop the cache so the very next poll fetches a fresh token.
+                    if (data?.needsRefresh) {
+                        this.wsCredsCache.delete(serverId);
+                    } else if (data?.wsToken && data?.wsSocket) {
+                        this.wsCredsCache.set(serverId, { token: data.wsToken, socket: data.wsSocket });
+                    }
+
                     const newLogs: string[] = data?.logs || [];
                     if (newLogs.length > 0) {
                         const existing = this.consoleLogsMap.get(serverId) || [];
