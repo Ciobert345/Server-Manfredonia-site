@@ -1,4 +1,3 @@
-
 export interface MCSSServer {
     serverId: string;
     status: number;
@@ -13,11 +12,29 @@ export interface MCSSStats {
     onlinePlayers: number;
     maxPlayers: number;
     uptime: string;
-    status?: number;
+    status: number; // 0=offline, 1=running, 3=starting, 4=stopping (same convention as MCSSServer.status)
 }
 
 const DEFAULT_BASE_URL = 'https://server-manfredonia.ddns.net:25560';
 const SILENT_ERRORS = true; // Set to true to suppress repetitive fetch timeout logs in console
+
+/**
+ * MCSS may return status either as a number already matching this app's own
+ * convention (0=offline, 1=running, 3=starting, 4=stopping — same as
+ * MCSSServer.status coming straight from /api/v2/servers), or as a string
+ * like "Running"/"Starting"/"Stopping"/"Stopped". Handle both.
+ */
+function normalizeStatus(raw: any): number {
+    if (typeof raw === 'number') return raw;
+    if (typeof raw === 'string') {
+        const s = raw.toLowerCase();
+        if (s.includes('starting')) return 3;
+        if (s.includes('stopping')) return 4;
+        if (s.includes('running') || s.includes('online') || s.includes('started')) return 1;
+        if (s.includes('offline') || s.includes('stopped')) return 0;
+    }
+    return 1; // unknown -> assume running rather than flashing offline
+}
 
 export class MCSSService {
     private baseUrl: string;
@@ -184,6 +201,9 @@ export class MCSSService {
                 formattedUptime = rawUptime;
             }
 
+            const rawStatus = get('status', 'Status', 'serverStatus', 'ServerStatus', 'state', 'State');
+            const status = normalizeStatus(rawStatus);
+
             return {
                 cpuUsage: get('cpu', 'cpuUsage', 'CPU', 'cpu_usage') ?? 0,
                 ramUsage: (typeof memLimit === 'number' && memLimit > 0 && typeof memUsed === 'number')
@@ -191,7 +211,8 @@ export class MCSSService {
                     : (Number(get('ramUsage', 'ram', 'memoryUsage', 'memory_usage')) || 0),
                 onlinePlayers: get('playersOnline', 'onlinePlayers', 'OnlinePlayers', 'PlayersOnline', 'players') ?? 0,
                 maxPlayers: get('playerLimit', 'maxPlayers', 'MaxPlayers', 'PlayerLimit', 'max_players') ?? 0,
-                uptime: formattedUptime
+                uptime: formattedUptime,
+                status
             };
         } catch (err: any) {
             if (!SILENT_ERRORS) {
