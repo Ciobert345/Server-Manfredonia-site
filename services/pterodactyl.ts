@@ -1,7 +1,12 @@
 import { MCSSServer, MCSSStats } from './mcss';
 
 const DEFAULT_BASE_URL = 'https://panel.example.com';
-const SILENT_ERRORS = true;
+const SILENT_ERRORS = false;
+
+// Minecraft server address used for the "Server List Ping" player-count query.
+// This is independent of the Pterodactyl Panel/Wings addresses.
+const MC_SERVER_HOST = 'server-manfredonia.ddns.net';
+const MC_SERVER_PORT = 25565;
 
 export interface PterodactylWebsocketData {
     token: string;
@@ -189,11 +194,31 @@ export class PterodactylService {
                 formattedUptime = [hours, minutes, seconds].map(v => v.toString().padStart(2, '0')).join(':');
             }
 
+            let onlinePlayers = 0;
+            let maxPlayers = 0;
+            try {
+                const mcResponse = await fetch('/.netlify/functions/pterodactyl-mcstatus', {
+                    method: 'GET',
+                    headers: {
+                        'mc-host': MC_SERVER_HOST,
+                        'mc-port': String(MC_SERVER_PORT),
+                    },
+                });
+                if (mcResponse.ok) {
+                    const mcData = await mcResponse.json();
+                    onlinePlayers = mcData?.onlinePlayers ?? 0;
+                    maxPlayers = mcData?.maxPlayers ?? 0;
+                }
+            } catch {
+                // Minecraft server unreachable/offline — fall back to 0/0 silently,
+                // the CPU/RAM/uptime stats above are still valid and returned.
+            }
+
             return {
                 cpuUsage: cpuUsage,
                 ramUsage: memoryMb > 0 ? Math.min(100, Math.round((memoryMb / 4096) * 100)) : 0,
-                onlinePlayers: 0,
-                maxPlayers: 20,
+                onlinePlayers,
+                maxPlayers,
                 uptime: formattedUptime
             };
         } catch (err: any) {
@@ -284,10 +309,6 @@ export class PterodactylService {
 
                 if (response.ok) {
                     const data = await response.json();
-                    // Always log debug info to help diagnose issues
-                    if (data?.debug) {
-                        console.info('[PTERODACTYL CONSOLE DEBUG]', JSON.stringify(data.debug));
-                    }
 
                     // Cache the credentials for the next poll, unless the function
                     // told us the cached ones had expired (needsRefresh) — in that
