@@ -63,11 +63,18 @@ const AppHome: React.FC = () => {
                 }
             }
             if (currentServerId) {
-                const servers = await mcssService.getServers();
+                const [stats, servers] = await Promise.all([
+                    mcssService.getServerStats(currentServerId).catch(() => null),
+                    mcssService.getServers().catch(() => [])
+                ]);
                 const server = servers.find(s => s.serverId === currentServerId);
+                const currentStatus = stats?.status ?? server?.status ?? 0;
+                const statusMap: { [key: number]: string } = {
+                    0: 'OFFLINE', 1: 'ONLINE', 2: 'RESTARTING', 3: 'STARTING', 4: 'STOPPING'
+                };
                 setServerStatus({
-                    online: server?.status === 1,
-                    statusText: server?.status === 1 ? 'ONLINE' : 'OFFLINE',
+                    online: currentStatus === 1,
+                    statusText: statusMap[currentStatus] || 'OFFLINE',
                 });
                 addLog('UP:', 'Uplink Synchronized', 'text-emerald-500/60');
             }

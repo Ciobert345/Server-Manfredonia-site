@@ -13,13 +13,18 @@ export interface PterodactylWebsocketData {
     socket: string;
 }
 
-// 0 = offline, 1 = running/online, 3 = starting, 4 = stopping
-function mapCurrentState(state: string | undefined): number {
-    if (state === 'offline') return 0;
-    if (state === 'running') return 1;
-    if (state === 'starting') return 3;
-    if (state === 'stopping') return 4;
-    return 1; // unknown -> assume online rather than flashing offline
+// 0 = offline, 1 = running/online, 2 = restarting, 3 = starting, 4 = stopping
+function mapCurrentState(state: string | number | undefined): number {
+    if (typeof state === 'number') return state;
+    if (typeof state === 'string') {
+        const s = state.toLowerCase().trim();
+        if (s.includes('starting')) return 3;
+        if (s.includes('stopping')) return 4;
+        if (s.includes('restarting')) return 2;
+        if (s.includes('running') || s.includes('online') || s.includes('started')) return 1;
+        if (s.includes('offline') || s.includes('stopped')) return 0;
+    }
+    return 0; // unknown -> default to offline rather than assume online
 }
 
 export class PterodactylService {
@@ -154,7 +159,7 @@ export class PterodactylService {
                 const attr = item.attributes || {};
                 const identifier = attr.identifier || attr.uuid || '';
 
-                let statusCode = 1; // Default to online
+                let statusCode = 0; // Default to offline if resource check fails or is pending
                 try {
                     const resData = await this.fetchApi(`/api/client/servers/${identifier}/resources`);
                     statusCode = mapCurrentState(resData?.attributes?.current_state);

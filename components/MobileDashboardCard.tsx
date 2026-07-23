@@ -77,7 +77,7 @@ export const MobileDashboardCard: React.FC = () => {
                 if (!serverStats || !servers) throw new Error('Incomplete data from MCSS');
 
                 const server = servers.find(s => s.serverId === currentServerId);
-                const currentStatus = server?.status ?? 0;
+                const currentStatus = serverStats?.status ?? server?.status ?? 0;
 
                 const statusMap: { [key: number]: string } = {
                     0: 'OFFLINE', 1: 'ONLINE', 2: 'RESTARTING', 3: 'STARTING', 4: 'STOPPING'

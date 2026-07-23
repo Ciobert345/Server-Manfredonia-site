@@ -83,9 +83,11 @@ const AppDashboard: React.FC = () => {
                     0: 'OFFLINE', 1: 'ONLINE', 2: 'RESTARTING', 3: 'STARTING', 4: 'STOPPING'
                 };
 
+                const effectiveStatus = stats.status ?? server?.status ?? 0;
+
                 setServerStatus({
-                    online: server?.status === 1,
-                    statusText: statusMap[server?.status ?? 0] || 'UNKNOWN',
+                    online: effectiveStatus === 1,
+                    statusText: statusMap[effectiveStatus] || 'UNKNOWN',
                     cpu: stats.cpuUsage,
                     ram: stats.ramUsage,
                     players: { online: stats.onlinePlayers, max: stats.maxPlayers },
