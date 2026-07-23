@@ -13,6 +13,15 @@ export interface PterodactylWebsocketData {
     socket: string;
 }
 
+// 0 = offline, 1 = running/online, 3 = starting, 4 = stopping
+function mapCurrentState(state: string | undefined): number {
+    if (state === 'offline') return 0;
+    if (state === 'running') return 1;
+    if (state === 'starting') return 3;
+    if (state === 'stopping') return 4;
+    return 1; // unknown -> assume online rather than flashing offline
+}
+
 export class PterodactylService {
     private baseUrl: string;
     private apiKey: string;
@@ -148,11 +157,7 @@ export class PterodactylService {
                 let statusCode = 1; // Default to online
                 try {
                     const resData = await this.fetchApi(`/api/client/servers/${identifier}/resources`);
-                    const state = resData?.attributes?.current_state;
-                    if (state === 'offline') statusCode = 0;
-                    else if (state === 'running') statusCode = 1;
-                    else if (state === 'starting') statusCode = 3;
-                    else if (state === 'stopping') statusCode = 4;
+                    statusCode = mapCurrentState(resData?.attributes?.current_state);
                 } catch {
                     // Ignore resource check error for single server
                 }
@@ -194,24 +199,32 @@ export class PterodactylService {
                 formattedUptime = [hours, minutes, seconds].map(v => v.toString().padStart(2, '0')).join(':');
             }
 
+            const state = attributes.current_state;
+            const status = mapCurrentState(state);
+
             let onlinePlayers = 0;
             let maxPlayers = 0;
-            try {
-                const mcResponse = await fetch('/.netlify/functions/pterodactyl-mcstatus', {
-                    method: 'GET',
-                    headers: {
-                        'mc-host': MC_SERVER_HOST,
-                        'mc-port': String(MC_SERVER_PORT),
-                    },
-                });
-                if (mcResponse.ok) {
-                    const mcData = await mcResponse.json();
-                    onlinePlayers = mcData?.onlinePlayers ?? 0;
-                    maxPlayers = mcData?.maxPlayers ?? 0;
+            // Only worth pinging the Minecraft process once it's actually running —
+            // during starting/stopping/offline it won't respond anyway, so skip it
+            // to avoid an unnecessary timeout on every poll during those states.
+            if (status === 1) {
+                try {
+                    const mcResponse = await fetch('/.netlify/functions/pterodactyl-mcstatus', {
+                        method: 'GET',
+                        headers: {
+                            'mc-host': MC_SERVER_HOST,
+                            'mc-port': String(MC_SERVER_PORT),
+                        },
+                    });
+                    if (mcResponse.ok) {
+                        const mcData = await mcResponse.json();
+                        onlinePlayers = mcData?.onlinePlayers ?? 0;
+                        maxPlayers = mcData?.maxPlayers ?? 0;
+                    }
+                } catch {
+                    // Minecraft server unreachable — fall back to 0/0 silently,
+                    // the CPU/RAM/uptime stats above are still valid and returned.
                 }
-            } catch {
-                // Minecraft server unreachable/offline — fall back to 0/0 silently,
-                // the CPU/RAM/uptime stats above are still valid and returned.
             }
 
             return {
@@ -219,7 +232,8 @@ export class PterodactylService {
                 ramUsage: memoryMb > 0 ? Math.min(100, Math.round((memoryMb / 4096) * 100)) : 0,
                 onlinePlayers,
                 maxPlayers,
-                uptime: formattedUptime
+                uptime: formattedUptime,
+                status, // 0=offline, 1=running, 3=starting, 4=stopping — add this field to MCSSStats if not already present
             };
         } catch (err: any) {
             if (!SILENT_ERRORS) {
