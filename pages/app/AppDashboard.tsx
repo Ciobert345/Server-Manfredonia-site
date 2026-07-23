@@ -14,6 +14,7 @@ const AppDashboard: React.FC = () => {
     const [serverName, setServerName] = useState<string>('MANFREDONIA');
     const [actionLoading, setActionLoading] = useState<string | null>(null);
     const [gracePassed, setGracePassed] = useState(false);
+    const [pendingTransition, setPendingTransition] = useState<{ statusText: string; targetOnline: boolean } | null>(null);
     const [loading, setLoading] = useState(true);
     const [logs, setLogs] = useState<{ time: string; tag: string; msg: string; color?: string }[]>([]);
 
@@ -84,10 +85,23 @@ const AppDashboard: React.FC = () => {
                 };
 
                 const effectiveStatus = stats.status ?? server?.status ?? 0;
+                let statusText = statusMap[effectiveStatus] || 'UNKNOWN';
+
+                if (pendingTransition) {
+                    if (pendingTransition.targetOnline && effectiveStatus === 1) {
+                        setPendingTransition(null);
+                    } else if (!pendingTransition.targetOnline && effectiveStatus === 0) {
+                        setPendingTransition(null);
+                    } else if (effectiveStatus === 3 || effectiveStatus === 4) {
+                        statusText = statusMap[effectiveStatus];
+                    } else {
+                        statusText = pendingTransition.statusText;
+                    }
+                }
 
                 setServerStatus({
                     online: effectiveStatus === 1,
-                    statusText: statusMap[effectiveStatus] || 'UNKNOWN',
+                    statusText,
                     cpu: stats.cpuUsage,
                     ram: stats.ramUsage,
                     players: { online: stats.onlinePlayers, max: stats.maxPlayers },
@@ -104,7 +118,7 @@ const AppDashboard: React.FC = () => {
             }));
             addLog('ERR:', `Uplink Fail: ${err.message}`, 'text-red-500');
         }
-    }, [mcssService, serverId, addLog]);
+    }, [mcssService, serverId, addLog, pendingTransition]);
 
     const isInitialSyncStarted = React.useRef(false);
     const lastMcssServiceId = React.useRef<string | null>(null);
@@ -112,16 +126,22 @@ const AppDashboard: React.FC = () => {
     // DEEP DIAGNOSTIC INIT: Bypasses guards to show what's happening
     useEffect(() => {
         const init = async () => {
+            const currentServiceId = mcssService ? (mcssService.constructor.name + (mcssService as any).baseUrl) : null;
+
+            if (currentServiceId !== lastMcssServiceId.current) {
+                isInitialSyncStarted.current = false;
+                lastMcssServiceId.current = currentServiceId;
+            }
+
             // Log raw state info
             const stateInfo = `Auth:${authLoading ? 'WAIT' : 'OK'} Config:${configLoading ? 'WAIT' : 'OK'} Svc:${mcssService ? 'READY' : 'NULL'}`;
             addLog('DBG:', stateInfo, 'text-white/20');
 
-            if (isInitialSyncStarted.current && lastMcssServiceId.current === mcssService?.constructor.name) return;
+            if (isInitialSyncStarted.current) return;
 
             try {
                 if (mcssService) {
                     isInitialSyncStarted.current = true;
-                    lastMcssServiceId.current = mcssService.constructor.name;
 
                     addLog('UP:', `Uplink Engine: ONLINE`, 'text-blue-500');
                     await fetchDetailedStats();
@@ -160,15 +180,28 @@ const AppDashboard: React.FC = () => {
     const handleServerAction = async (action: string) => {
         if (!mcssService || !serverId || actionLoading) return;
         setActionLoading(action);
+
+        const isStart = action === 'Start' || action === 'Restart';
+        const isStop = action === 'Stop' || action === 'Kill';
+
+        if (isStart) {
+            setPendingTransition({ statusText: 'STARTING', targetOnline: true });
+            setServerStatus(prev => ({ ...prev, statusText: 'STARTING', online: false }));
+        } else if (isStop) {
+            setPendingTransition({ statusText: 'STOPPING', targetOnline: false });
+            setServerStatus(prev => ({ ...prev, statusText: 'STOPPING', online: false }));
+        }
+
         addLog('CMD:', `Exec ${action.toUpperCase()}`, 'text-orange-400');
         try {
             await Haptics.impact({ style: ImpactStyle.Heavy });
             await mcssService.executeAction(serverId, action);
             addLog('OK:', `${action.toUpperCase()} acknowledge`, 'text-emerald-400');
-            await new Promise(resolve => setTimeout(resolve, 2000));
+            await new Promise(resolve => setTimeout(resolve, 1500));
             await fetchDetailedStats();
             await Haptics.notification({ type: 'SUCCESS' as any });
         } catch (err: any) {
+            setPendingTransition(null);
             addLog('ERR:', `Failed: ${err.message}`, 'text-red-400');
             await Haptics.notification({ type: 'ERROR' as any });
             if (err.message?.includes('fetch') || err.message?.includes('Network')) {

@@ -54,6 +54,8 @@ export const MobileDashboardCard: React.FC = () => {
         setMounted(true);
     }, []);
 
+    const [pendingTransition, setPendingTransition] = useState<{ statusText: string; targetOnline: boolean } | null>(null);
+
     const fetchStats = useCallback(async () => {
         if (!mcssService) return;
         try {
@@ -83,11 +85,25 @@ export const MobileDashboardCard: React.FC = () => {
                     0: 'OFFLINE', 1: 'ONLINE', 2: 'RESTARTING', 3: 'STARTING', 4: 'STOPPING'
                 };
 
+                let statusText = statusMap[currentStatus] || 'UNKNOWN';
+
+                if (pendingTransition) {
+                    if (pendingTransition.targetOnline && currentStatus === 1) {
+                        setPendingTransition(null);
+                    } else if (!pendingTransition.targetOnline && currentStatus === 0) {
+                        setPendingTransition(null);
+                    } else if (currentStatus === 3 || currentStatus === 4) {
+                        statusText = statusMap[currentStatus];
+                    } else {
+                        statusText = pendingTransition.statusText;
+                    }
+                }
+
                 consecutiveFails.current = 0; // Success: reset threshold
                 setStats({
                     online: currentStatus === 1,
                     status: currentStatus,
-                    statusText: statusMap[currentStatus] || 'UNKNOWN',
+                    statusText,
                     cpu: serverStats?.cpuUsage ?? 0,
                     ram: serverStats?.ramUsage ?? 0,
                     players: { online: serverStats?.onlinePlayers ?? 0, max: serverStats?.maxPlayers ?? 20 },
@@ -98,7 +114,7 @@ export const MobileDashboardCard: React.FC = () => {
         } catch (err: any) {
             setStats(prev => ({ ...prev, statusText: 'LOSS_SYNC', unreachable: true }));
         }
-    }, [mcssService, serverId]);
+    }, [mcssService, serverId, pendingTransition]);
 
     useEffect(() => {
         fetchStats();
@@ -212,11 +228,24 @@ export const MobileDashboardCard: React.FC = () => {
     const handleAction = async (action: string) => {
         if (!mcssService || !serverId || actionLoading) return;
         setActionLoading(action);
+
+        const isStart = action === 'Start' || action === 'Restart';
+        const isStop = action === 'Stop' || action === 'Kill';
+
+        if (isStart) {
+            setPendingTransition({ statusText: 'STARTING', targetOnline: true });
+            setStats(prev => ({ ...prev, statusText: 'STARTING', online: false, status: 3 }));
+        } else if (isStop) {
+            setPendingTransition({ statusText: 'STOPPING', targetOnline: false });
+            setStats(prev => ({ ...prev, statusText: 'STOPPING', online: false, status: 4 }));
+        }
+
         try {
             await mcssService.executeAction(serverId, action);
-            await new Promise(r => setTimeout(r, 2000));
+            await new Promise(r => setTimeout(r, 1500));
             await fetchStats();
         } catch (err) {
+            setPendingTransition(null);
             addNotification('error', `Failed to execute ${action}`);
         } finally {
             setActionLoading(null);

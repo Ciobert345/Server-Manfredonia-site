@@ -38,6 +38,8 @@ const Dashboard: React.FC = () => {
   const buildRef = '1.2.0-TAC';
   const geoCoords = { lat: 41.8, lon: 15.9 };
 
+  const [pendingTransition, setPendingTransition] = useState<{ statusText: string; targetOnline: boolean } | null>(null);
+
   const addLog = useCallback((tag: string, msg: string, color?: string) => {
     const time = new Date().toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
     setLogs(prev => [...prev.slice(-4), { time: `[${time}]`, tag, msg, color }]);
@@ -69,10 +71,23 @@ const Dashboard: React.FC = () => {
         };
 
         const effectiveStatus = stats.status ?? server?.status ?? 0;
+        let statusText = statusMap[effectiveStatus] || 'UNKNOWN';
+
+        if (pendingTransition) {
+          if (pendingTransition.targetOnline && effectiveStatus === 1) {
+            setPendingTransition(null);
+          } else if (!pendingTransition.targetOnline && effectiveStatus === 0) {
+            setPendingTransition(null);
+          } else if (effectiveStatus === 3 || effectiveStatus === 4) {
+            statusText = statusMap[effectiveStatus];
+          } else {
+            statusText = pendingTransition.statusText;
+          }
+        }
 
         setServerStatus({
           online: effectiveStatus === 1,
-          statusText: statusMap[effectiveStatus] || 'UNKNOWN',
+          statusText,
           cpu: stats.cpuUsage,
           ram: stats.ramUsage,
           players: { online: stats.onlinePlayers, max: stats.maxPlayers },
@@ -88,7 +103,7 @@ const Dashboard: React.FC = () => {
         statusText: 'UNREACHABLE'
       }));
     }
-  }, [mcssService, serverId]);
+  }, [mcssService, serverId, pendingTransition]);
 
   useEffect(() => {
     const init = async () => {
@@ -141,13 +156,26 @@ const Dashboard: React.FC = () => {
   const handleServerAction = async (action: string) => {
     if (!mcssService || !serverId || actionLoading) return;
     setActionLoading(action);
+
+    const isStart = action === 'Start' || action === 'Restart';
+    const isStop = action === 'Stop' || action === 'Kill';
+
+    if (isStart) {
+      setPendingTransition({ statusText: 'STARTING', targetOnline: true });
+      setServerStatus(prev => ({ ...prev, statusText: 'STARTING', online: false }));
+    } else if (isStop) {
+      setPendingTransition({ statusText: 'STOPPING', targetOnline: false });
+      setServerStatus(prev => ({ ...prev, statusText: 'STOPPING', online: false }));
+    }
+
     addLog('CMD:', `Exec ${action.toUpperCase()}...`, 'text-orange-400');
     try {
       await mcssService.executeAction(serverId, action);
       addLog('OK:', `${action.toUpperCase()} acknowledge.`, 'text-emerald-400');
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      await new Promise(resolve => setTimeout(resolve, 1500));
       await fetchDetailedStats();
     } catch (err: any) {
+      setPendingTransition(null);
       addLog('ERR:', `Failed: ${err.message}`, 'text-red-400');
       if (err.message.includes('fetch') || err.message.includes('Network')) {
         setServerStatus(prev => ({ ...prev, isUnreachable: true }));
