@@ -100,24 +100,50 @@ export class PterodactylService {
                     return text ? JSON.parse(text) : {};
                 }
             } else {
-                // Web: direct HTTPS fetch — SSL is now set up on the panel
-                const response = await fetch(targetUrl, {
-                    method: options.method || 'GET',
-                    headers: {
-                        'Authorization': authHeader,
-                        'Content-Type': 'application/json',
-                        'Accept': 'application/json',
-                    },
-                    body: options.body,
-                });
+                // Web: route through Netlify proxy to avoid CORS restrictions.
+                // The proxy makes a server-to-server HTTPS call — no CORS issues.
+                // Once CORS is configured on the Nginx/Pterodactyl side, this can
+                // be switched to a direct fetch (see commented block below).
+                try {
+                    const cleanKey = this.apiKey.replace(/^Bearer\s+/i, '');
+                    const response = await fetch('/.netlify/functions/pterodactyl-proxy', {
+                        method: options.method || 'GET',
+                        headers: {
+                            'pterodactyl-target-url': targetUrl,
+                            'pterodactyl-api-key': cleanKey,
+                            'Content-Type': 'application/json',
+                        },
+                        body: options.body,
+                    });
 
-                if (!response.ok) {
+                    if (response.ok) {
+                        const text = await response.text();
+                        return text ? JSON.parse(text) : {};
+                    }
+
                     const errorData = await response.json().catch(() => ({}));
-                    throw new Error(errorData?.errors?.[0]?.detail || errorData.error || `Pterodactyl Error: ${response.status}`);
-                }
+                    throw new Error(errorData?.error || errorData?.errors?.[0]?.detail || `Proxy Error: ${response.status}`);
+                } catch (proxyErr: any) {
+                    // Proxy failed — try direct HTTPS as last resort.
+                    // This will only succeed once CORS headers are set on the panel's Nginx.
+                    const response = await fetch(targetUrl, {
+                        method: options.method || 'GET',
+                        headers: {
+                            'Authorization': authHeader,
+                            'Content-Type': 'application/json',
+                            'Accept': 'application/json',
+                        },
+                        body: options.body,
+                    });
 
-                const text = await response.text();
-                return text ? JSON.parse(text) : {};
+                    if (!response.ok) {
+                        const errorData = await response.json().catch(() => ({}));
+                        throw new Error(errorData?.errors?.[0]?.detail || errorData.error || `Pterodactyl Error: ${response.status}`);
+                    }
+
+                    const text = await response.text();
+                    return text ? JSON.parse(text) : {};
+                }
             }
         } catch (err: any) {
             if (!SILENT_ERRORS) {
