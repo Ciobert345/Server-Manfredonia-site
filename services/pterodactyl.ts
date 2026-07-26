@@ -304,10 +304,18 @@ export class PterodactylService {
      * If the socket is already CONNECTING or OPEN, this is a no-op.
      * Tokens are cached for ~14 minutes to avoid hammering the REST API.
      */
+    private lastWsAttemptMap = new Map<string, number>();
+
     private async ensureBrowserWebSocket(serverId: string): Promise<void> {
         const existing = this.wsConnections.get(serverId);
         if (existing && (existing.readyState === WebSocket.CONNECTING || existing.readyState === WebSocket.OPEN)) {
             return; // already alive
+        }
+
+        // Throttle token fetch attempts to at most once per 10 seconds to avoid 429 Too Many Requests
+        const lastAttempt = this.lastWsAttemptMap.get(serverId) || 0;
+        if (Date.now() - lastAttempt < 10000) {
+            return;
         }
 
         // Resolve WS credentials (token + socket URL)
@@ -319,6 +327,7 @@ export class PterodactylService {
             wsToken = cached.token;
             wsSocket = cached.socket;
         } else {
+            this.lastWsAttemptMap.set(serverId, Date.now());
             try {
                 const wsData = await this.getWebsocketToken(serverId);
                 wsToken = wsData.token;
