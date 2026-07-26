@@ -51,7 +51,7 @@ const LiveTerminal: React.FC<LiveTerminalProps> = ({ serverOnline = false }) => 
 
         const interval = setInterval(() => {
             if (!document.hidden) pollLogs();
-        }, 1000);
+        }, 3000);
         return () => clearInterval(interval);
     }, [mcssService, serverId]);
 

@@ -281,11 +281,13 @@ export class PterodactylService {
     // ─────────────────────────────────────────────────────────────────────────
 
     // ── Console socket state ────────────────────────────────────────────────
-    private wsMap      = new Map<string, WebSocket>();
-    private wsBackoff  = new Map<string, number>();           // current delay ms
-    private wsReconTimer = new Map<string, ReturnType<typeof setTimeout>>();
-    private wsRenewTimer = new Map<string, ReturnType<typeof setTimeout>>();
-    private wsDestroyed  = new Set<string>();                 // sockets closed on purpose
+    private wsMap           = new Map<string, WebSocket>();
+    private wsBackoff       = new Map<string, number>();      // current reconnect delay ms
+    private wsReconTimer    = new Map<string, ReturnType<typeof setTimeout>>();
+    private wsRenewTimer    = new Map<string, ReturnType<typeof setTimeout>>();
+    private wsDestroyed     = new Set<string>();              // sockets closed on purpose
+    private wsConnecting    = new Set<string>();              // token fetch in flight — prevents duplicate fetches
+    private wsPendingRecon  = new Set<string>();              // backoff timer active — prevents bypassing backoff
 
     // ── Helpers ─────────────────────────────────────────────────────────────
 
@@ -350,6 +352,12 @@ export class PterodactylService {
     private async _ensureSocket(serverId: string): Promise<void> {
         if (this.wsDestroyed.has(serverId)) return;
 
+        // Guard 1: already waiting for a backoff timer — don't bypass it
+        if (this.wsPendingRecon.has(serverId)) return;
+
+        // Guard 2: a token fetch is already in flight — don't make a parallel one
+        if (this.wsConnecting.has(serverId)) return;
+
         const existing = this.wsMap.get(serverId);
         if (existing &&
             (existing.readyState === WebSocket.OPEN ||
@@ -357,6 +365,7 @@ export class PterodactylService {
             return;
         }
 
+        this.wsConnecting.add(serverId);
         let token: string;
         let rawSocket: string;
         try {
@@ -365,10 +374,14 @@ export class PterodactylService {
             token     = attr.token  || '';
             rawSocket = attr.socket || '';
         } catch (err: any) {
+            this.wsConnecting.delete(serverId);
+            const is429 = err.message?.includes('429') || err.message?.includes('Too Many');
             console.warn('[PTERODACTYL WS] Token fetch failed:', err.message);
-            this._scheduleReconnect(serverId);
+            // On 429, back off for at least 60 s to let the rate limiter reset
+            this._scheduleReconnect(serverId, is429 ? 60_000 : undefined);
             return;
         }
+        this.wsConnecting.delete(serverId);
 
         if (!token || !rawSocket) {
             console.warn('[PTERODACTYL WS] Empty token or socket URL');
@@ -458,16 +471,28 @@ export class PterodactylService {
         };
     }
 
-    private _scheduleReconnect(serverId: string) {
+    private _scheduleReconnect(serverId: string, forceDelay?: number) {
         if (this.wsDestroyed.has(serverId)) return;
         clearTimeout(this.wsReconTimer.get(serverId));
 
-        const current = this.wsBackoff.get(serverId) ?? 0;
-        const delay   = current === 0 ? 3_000 : Math.min(current * 2, 30_000);
-        this.wsBackoff.set(serverId, delay);
+        let delay: number;
+        if (forceDelay !== undefined) {
+            delay = forceDelay;
+            this.wsBackoff.set(serverId, forceDelay);
+        } else {
+            const current = this.wsBackoff.get(serverId) ?? 0;
+            delay = current === 0 ? 3_000 : Math.min(current * 2, 30_000);
+            this.wsBackoff.set(serverId, delay);
+        }
+
+        // Mark as pending so _ensureSocket() calls during the backoff are no-ops
+        this.wsPendingRecon.add(serverId);
 
         console.info(`[PTERODACTYL WS] Reconnecting in ${delay / 1000}s for ${serverId}`);
-        const t = setTimeout(() => this._ensureSocket(serverId), delay);
+        const t = setTimeout(() => {
+            this.wsPendingRecon.delete(serverId);
+            this._ensureSocket(serverId);
+        }, delay);
         this.wsReconTimer.set(serverId, t);
     }
 
@@ -531,6 +556,8 @@ export class PterodactylService {
         this.wsRenewTimer.clear();
         this.wsBackoff.clear();
         this.wsDestroyed.clear();
+        this.wsConnecting.clear();
+        this.wsPendingRecon.clear();
         this.consoleLogsMap.clear();
         this._nativeCredsCache.clear();
     }
