@@ -52,19 +52,16 @@ export const handler = async (event) => {
             socketUrl = attr.socket;
             credentialsRefreshed = true;
 
-            // If Wings FQDN is a private/local IP, replace it with the panel's host
-            // so Netlify can attempt to reach it via the external IP.
+            // Route Wings WebSocket through Nginx proxy (same host & port as panelUrl)
             if (socketUrl) {
-                const panelUrl = new URL(baseUrl);
-                const panelHost = panelUrl.hostname;
-                const isLocalIp = /^(192\.168\.|10\.|172\.(1[6-9]|2[0-9]|3[01])\.)/.test(
-                    new URL(socketUrl).hostname
-                );
-                if (isLocalIp && panelHost) {
+                try {
+                    const panelUrl = new URL(baseUrl);
                     const wsUrl = new URL(socketUrl);
-                    wsUrl.hostname = panelHost;
+                    wsUrl.hostname = panelUrl.hostname;
+                    if (panelUrl.port) wsUrl.port = panelUrl.port;
+                    wsUrl.protocol = panelUrl.protocol === 'https:' ? 'wss:' : 'ws:';
                     socketUrl = wsUrl.toString();
-                }
+                } catch { }
             }
         } catch (err) {
             return {

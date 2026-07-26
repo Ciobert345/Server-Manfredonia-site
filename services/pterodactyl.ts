@@ -423,11 +423,19 @@ export class PterodactylService {
                 const newLogs: string[] = data?.logs || [];
                 if (newLogs.length > 0) {
                     const existing = this.consoleLogsMap.get(serverId) || [];
+                    const filtered = existing.filter(l => !l.startsWith('[Pterodactyl Console:'));
                     const merged = [
-                        ...existing.filter(l => l.startsWith('> [EXEC]:')),
+                        ...filtered.filter(l => l.startsWith('> [EXEC]:')),
                         ...newLogs
                     ].slice(-200);
                     this.consoleLogsMap.set(serverId, merged);
+                } else if (data?.debug?.authOk) {
+                    const existing = this.consoleLogsMap.get(serverId) || [];
+                    if (existing.some(l => l.startsWith('[Pterodactyl Console: connecting'))) {
+                        this.consoleLogsMap.set(serverId, [
+                            `[Pterodactyl Console: linked to ${serverId}. Ready for command directives...]`
+                        ]);
+                    }
                 }
             }
         } catch (e: any) {
