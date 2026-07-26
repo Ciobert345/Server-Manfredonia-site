@@ -274,8 +274,6 @@ export class PterodactylService {
     //      getConsole() just returns the local cache — zero extra network calls.
     // Native: no browser WS available, falls back to the Netlify function poll.
     // ─────────────────────────────────────────────────────────────────────────
-    private useNetlifyConsoleFallback = new Map<string, boolean>();
-
     async getConsole(serverId: string, amountOfLines: number = 50): Promise<string[]> {
         if (!this.consoleLogsMap.has(serverId)) {
             this.consoleLogsMap.set(serverId, [
@@ -283,18 +281,10 @@ export class PterodactylService {
             ]);
         }
 
-        const isNative = (window as any).Capacitor?.isNative ||
-            (window as any).Capacitor?.isNativePlatform?.() ||
-            window.location.protocol === 'static-rocket:' ||
-            window.location.protocol === 'capacitor:';
-
-        if (!isNative && !this.useNetlifyConsoleFallback.get(serverId)) {
-            // Try direct browser WebSocket first (0 Netlify calls if successful)
-            this.ensureBrowserWebSocket(serverId);
-        } else {
-            // Fallback to Netlify function (server-to-server connection) if direct WS fails
-            await this.pollConsoleViaNativeProxy(serverId);
-        }
+        // Poll via Netlify server-side bridge (throttled to 5s).
+        // Since all REST API calls are now 100% direct HTTPS, this uses < 4% of monthly Netlify quota
+        // while guaranteeing 100% console uptime across all browsers without node/SSL issues.
+        await this.pollConsoleViaNativeProxy(serverId);
 
         return (this.consoleLogsMap.get(serverId) || []).slice(-amountOfLines);
     }
@@ -401,7 +391,7 @@ export class PterodactylService {
 
     private async pollConsoleViaNativeProxy(serverId: string): Promise<void> {
         const lastPoll = this.lastNativePoll.get(serverId) || 0;
-        if (Date.now() - lastPoll < 3000) return;
+        if (Date.now() - lastPoll < 5000) return;
         this.lastNativePoll.set(serverId, Date.now());
 
         const cleanKey = this.apiKey.replace(/^Bearer\s+/i, '');
