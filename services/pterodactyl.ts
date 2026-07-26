@@ -336,9 +336,17 @@ export class PterodactylService {
                     this.consoleLogsMap.set(serverId, merged);
                 } else if (data?.debug?.authOk) {
                     const existing = this.consoleLogsMap.get(serverId) || [];
-                    if (existing.some(l => l.startsWith('[Pterodactyl Console: connecting'))) {
+                    if (existing.some(l => l.startsWith('[Pterodactyl Console:'))) {
                         this.consoleLogsMap.set(serverId, [
                             `[Pterodactyl Console: linked to ${serverId}. Ready for command directives...]`
+                        ]);
+                    }
+                } else if (data?.debug) {
+                    const existing = this.consoleLogsMap.get(serverId) || [];
+                    if (existing.some(l => l.startsWith('[Pterodactyl Console:'))) {
+                        const errMsg = data.debug.wsError || data.debug.error || `socket: ${data.debug.socketUrl || 'connecting...'}`;
+                        this.consoleLogsMap.set(serverId, [
+                            `[Pterodactyl Console: ${errMsg}]`
                         ]);
                     }
                 }
