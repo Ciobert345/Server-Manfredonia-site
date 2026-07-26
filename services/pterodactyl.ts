@@ -31,10 +31,6 @@ export class PterodactylService {
     private apiKey: string;
 
     private consoleLogsMap = new Map<string, string[]>();
-    // Browser WebSocket connections (one per server, persistent)
-    private wsConnections = new Map<string, WebSocket>();
-    // WS token cache: avoid requesting a new token on every reconnect
-    private wsTokenCache = new Map<string, { token: string; socket: string; expiresAt: number }>();
 
     constructor(apiKey: string, baseUrl: string = DEFAULT_BASE_URL) {
         this.apiKey = apiKey ? apiKey.trim() : '';
@@ -289,98 +285,7 @@ export class PterodactylService {
         return (this.consoleLogsMap.get(serverId) || []).slice(-amountOfLines);
     }
 
-    /**
-     * Opens a persistent WebSocket to the Wings server for the given server ID.
-     * If the socket is already CONNECTING or OPEN, this is a no-op.
-     * Tokens are cached for ~14 minutes to avoid hammering the REST API.
-     */
-    private lastWsAttemptMap = new Map<string, number>();
 
-    private async ensureBrowserWebSocket(serverId: string): Promise<void> {
-        const existing = this.wsConnections.get(serverId);
-        if (existing && (existing.readyState === WebSocket.CONNECTING || existing.readyState === WebSocket.OPEN)) {
-            return; // already alive
-        }
-
-        // Throttle token fetch attempts to at most once per 10 seconds to avoid 429 Too Many Requests
-        const lastAttempt = this.lastWsAttemptMap.get(serverId) || 0;
-        if (Date.now() - lastAttempt < 10000) {
-            return;
-        }
-
-        // Resolve WS credentials (token + socket URL)
-        let wsToken: string;
-        let wsSocket: string;
-
-        const cached = this.wsTokenCache.get(serverId);
-        if (cached && Date.now() < cached.expiresAt) {
-            wsToken = cached.token;
-            wsSocket = cached.socket;
-        } else {
-            this.lastWsAttemptMap.set(serverId, Date.now());
-            try {
-                const wsData = await this.getWebsocketToken(serverId);
-                wsToken = wsData.token;
-                wsSocket = wsData.socket;
-                // Pterodactyl tokens expire in ~15 min — refresh 1 min early
-                this.wsTokenCache.set(serverId, {
-                    token: wsToken,
-                    socket: wsSocket,
-                    expiresAt: Date.now() + 14 * 60 * 1000,
-                });
-            } catch (err: any) {
-                if (!SILENT_ERRORS) console.warn('[PTERODACTYL WS] Could not get token:', err.message);
-                return;
-            }
-        }
-
-        if (!wsToken || !wsSocket) return;
-
-        const ws = new WebSocket(wsSocket);
-        this.wsConnections.set(serverId, ws);
-
-        let authSuccess = false;
-
-        ws.onopen = () => {
-            ws.send(JSON.stringify({ event: 'auth', args: [wsToken] }));
-        };
-
-        ws.onmessage = (event) => {
-            try {
-                const msg = JSON.parse(event.data);
-
-                if (msg.event === 'auth success') {
-                    authSuccess = true;
-                    ws.send(JSON.stringify({ event: 'send logs', args: [] }));
-                } else if (msg.event === 'console output') {
-                    const rawLog = msg.args?.[0] || '';
-                    const clean = rawLog.replace(/\x1B\[[0-9;]*[a-zA-Z]/g, '').trimEnd();
-                    if (clean) {
-                        const existing = this.consoleLogsMap.get(serverId) || [];
-                        const filtered = existing.filter(l => !l.startsWith('[Pterodactyl Console:'));
-                        this.consoleLogsMap.set(serverId, [...filtered, clean].slice(-200));
-                    }
-                } else if (msg.event === 'token expiring' || msg.event === 'token expired') {
-                    this.wsTokenCache.delete(serverId);
-                    ws.close();
-                }
-            } catch { }
-        };
-
-        ws.onerror = () => {
-            console.warn('[PTERODACTYL WS] Direct browser WebSocket error — switching to Netlify proxy fallback');
-            this.wsConnections.delete(serverId);
-            this.useNetlifyConsoleFallback.set(serverId, true);
-        };
-
-        ws.onclose = () => {
-            this.wsConnections.delete(serverId);
-            if (!authSuccess) {
-                console.warn('[PTERODACTYL WS] Direct browser WebSocket closed without auth — switching to Netlify proxy fallback');
-                this.useNetlifyConsoleFallback.set(serverId, true);
-            }
-        };
-    }
 
     /**
      * Native-only fallback: poll logs via the Netlify function.
@@ -461,10 +366,7 @@ export class PterodactylService {
      * Cleanly close all open WebSocket connections (call this on logout/unmount).
      */
     closeAllWebSockets(): void {
-        for (const [, ws] of this.wsConnections) {
-            try { ws.close(); } catch { }
-        }
-        this.wsConnections.clear();
-        this.wsTokenCache.clear();
+        this.consoleLogsMap.clear();
+        this.nativeWsCredsCache.clear();
     }
 }
