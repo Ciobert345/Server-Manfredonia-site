@@ -274,6 +274,8 @@ export class PterodactylService {
     //      getConsole() just returns the local cache — zero extra network calls.
     // Native: no browser WS available, falls back to the Netlify function poll.
     // ─────────────────────────────────────────────────────────────────────────
+    private useNetlifyConsoleFallback = new Map<string, boolean>();
+
     async getConsole(serverId: string, amountOfLines: number = 50): Promise<string[]> {
         if (!this.consoleLogsMap.has(serverId)) {
             this.consoleLogsMap.set(serverId, [
@@ -286,11 +288,11 @@ export class PterodactylService {
             window.location.protocol === 'static-rocket:' ||
             window.location.protocol === 'capacitor:';
 
-        if (!isNative) {
-            // Fire-and-forget: ensures the WebSocket is open, caches logs
+        if (!isNative && !this.useNetlifyConsoleFallback.get(serverId)) {
+            // Try direct browser WebSocket first (0 Netlify calls if successful)
             this.ensureBrowserWebSocket(serverId);
         } else {
-            // Native fallback: use Netlify function (no browser WS available)
+            // Fallback to Netlify function (server-to-server connection) if direct WS fails
             await this.pollConsoleViaNativeProxy(serverId);
         }
 
@@ -338,6 +340,8 @@ export class PterodactylService {
         const ws = new WebSocket(wsSocket);
         this.wsConnections.set(serverId, ws);
 
+        let authSuccess = false;
+
         ws.onopen = () => {
             ws.send(JSON.stringify({ event: 'auth', args: [wsToken] }));
         };
@@ -347,32 +351,35 @@ export class PterodactylService {
                 const msg = JSON.parse(event.data);
 
                 if (msg.event === 'auth success') {
+                    authSuccess = true;
                     ws.send(JSON.stringify({ event: 'send logs', args: [] }));
                 } else if (msg.event === 'console output') {
                     const rawLog = msg.args?.[0] || '';
                     const clean = rawLog.replace(/\x1B\[[0-9;]*[a-zA-Z]/g, '').trimEnd();
                     if (clean) {
                         const existing = this.consoleLogsMap.get(serverId) || [];
-                        // Remove the initial "connecting..." placeholder on first real log
                         const filtered = existing.filter(l => !l.startsWith('[Pterodactyl Console:'));
                         this.consoleLogsMap.set(serverId, [...filtered, clean].slice(-200));
                     }
                 } else if (msg.event === 'token expiring' || msg.event === 'token expired') {
-                    // Invalidate cache so the next ensureBrowserWebSocket() fetches a fresh token
                     this.wsTokenCache.delete(serverId);
                     ws.close();
                 }
-            } catch {
-                // ignore malformed frames
-            }
+            } catch { }
         };
 
         ws.onerror = () => {
+            console.warn('[PTERODACTYL WS] Direct browser WebSocket error — switching to Netlify proxy fallback');
             this.wsConnections.delete(serverId);
+            this.useNetlifyConsoleFallback.set(serverId, true);
         };
 
         ws.onclose = () => {
             this.wsConnections.delete(serverId);
+            if (!authSuccess) {
+                console.warn('[PTERODACTYL WS] Direct browser WebSocket closed without auth — switching to Netlify proxy fallback');
+                this.useNetlifyConsoleFallback.set(serverId, true);
+            }
         };
     }
 
@@ -385,7 +392,7 @@ export class PterodactylService {
 
     private async pollConsoleViaNativeProxy(serverId: string): Promise<void> {
         const lastPoll = this.lastNativePoll.get(serverId) || 0;
-        if (Date.now() - lastPoll < 5000) return;
+        if (Date.now() - lastPoll < 3000) return;
         this.lastNativePoll.set(serverId, Date.now());
 
         const cleanKey = this.apiKey.replace(/^Bearer\s+/i, '');
