@@ -49,7 +49,12 @@ const LiveTerminal: React.FC<LiveTerminalProps> = ({ serverOnline = false }) => 
         };
 
         if (serverOnline) pollLogs();
-        const interval = setInterval(pollLogs, 3000);
+
+        // Poll at 1s — this just reads from the in-memory cache populated by the
+        // persistent WebSocket; no network calls happen here.
+        const interval = setInterval(() => {
+            if (!document.hidden) pollLogs();
+        }, 1000);
         return () => clearInterval(interval);
     }, [mcssService, serverId, serverOnline]);
 

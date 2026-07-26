@@ -1,10 +1,9 @@
 import { MCSSServer, MCSSStats } from './mcss';
 
-const DEFAULT_BASE_URL = 'https://panel.example.com';
+const DEFAULT_BASE_URL = 'https://server-manfredonia.duckdns.org:25443';
 const SILENT_ERRORS = false;
 
 // Minecraft server address used for the "Server List Ping" player-count query.
-// This is independent of the Pterodactyl Panel/Wings addresses.
 const MC_SERVER_HOST = 'server-manfredonia.ddns.net';
 const MC_SERVER_PORT = 25565;
 
@@ -24,7 +23,7 @@ function mapCurrentState(state: string | number | undefined): number {
         if (s.includes('running') || s.includes('online') || s.includes('started')) return 1;
         if (s.includes('offline') || s.includes('stopped')) return 0;
     }
-    return 0; // unknown -> default to offline rather than assume online
+    return 0;
 }
 
 export class PterodactylService {
@@ -32,8 +31,10 @@ export class PterodactylService {
     private apiKey: string;
 
     private consoleLogsMap = new Map<string, string[]>();
-    private lastPolledAt = new Map<string, number>();
-    private wsCredsCache = new Map<string, { token: string; socket: string }>();
+    // Browser WebSocket connections (one per server, persistent)
+    private wsConnections = new Map<string, WebSocket>();
+    // WS token cache: avoid requesting a new token on every reconnect
+    private wsTokenCache = new Map<string, { token: string; socket: string; expiresAt: number }>();
 
     constructor(apiKey: string, baseUrl: string = DEFAULT_BASE_URL) {
         this.apiKey = apiKey ? apiKey.trim() : '';
@@ -45,6 +46,9 @@ export class PterodactylService {
         this.baseUrl = cleanUrl;
     }
 
+    // ─────────────────────────────────────────────────────────────────────────
+    // Core fetch helper – direct HTTPS, no Netlify proxy needed
+    // ─────────────────────────────────────────────────────────────────────────
     private async fetchApi(endpoint: string, options: RequestInit = {}) {
         const targetUrl = `${this.baseUrl}${endpoint}`;
 
@@ -58,6 +62,7 @@ export class PterodactylService {
 
         try {
             if (isNative) {
+                // Native: try CapacitorHttp (bypasses CORS), fall back to fetch
                 try {
                     const { CapacitorHttp } = await import('@capacitor/core');
                     const response = await CapacitorHttp.request({
@@ -76,9 +81,8 @@ export class PterodactylService {
                     if (response.status < 200 || response.status >= 300) {
                         throw new Error(response.data?.errors?.[0]?.detail || response.data?.error || `Pterodactyl Error: ${response.status}`);
                     }
-
                     return response.data || {};
-                } catch (cHttpErr) {
+                } catch {
                     const response = await fetch(targetUrl, {
                         method: options.method || 'GET',
                         headers: {
@@ -88,42 +92,15 @@ export class PterodactylService {
                         },
                         body: options.body,
                     });
-
                     if (!response.ok) {
                         const errorData = await response.json().catch(() => ({}));
                         throw new Error(errorData?.errors?.[0]?.detail || errorData.error || `Pterodactyl Error: ${response.status}`);
                     }
-
                     const text = await response.text();
                     return text ? JSON.parse(text) : {};
                 }
             } else {
-                // Web Environment: First attempt Netlify Proxy
-                try {
-                    const response = await fetch('/.netlify/functions/pterodactyl-proxy', {
-                        method: options.method || 'GET',
-                        headers: {
-                            'pterodactyl-target-url': targetUrl,
-                            'pterodactyl-api-key': cleanKey,
-                            'Content-Type': 'application/json',
-                        },
-                        body: options.body,
-                    });
-
-                    if (response.ok) {
-                        const text = await response.text();
-                        return text ? JSON.parse(text) : {};
-                    } else if (response.status !== 404) {
-                        const errorData = await response.json().catch(() => ({}));
-                        throw new Error(errorData?.error || errorData?.errors?.[0]?.detail || `Proxy Error: ${response.status}`);
-                    }
-                } catch (proxyErr: any) {
-                    if (proxyErr.message && !proxyErr.message.includes('404')) {
-                        console.warn('[PTERODACTYL] Proxy attempt failed, trying direct fetch:', proxyErr.message);
-                    }
-                }
-
-                // Fallback: Direct Fetch
+                // Web: direct HTTPS fetch — SSL is now set up on the panel
                 const response = await fetch(targetUrl, {
                     method: options.method || 'GET',
                     headers: {
@@ -150,6 +127,9 @@ export class PterodactylService {
         }
     }
 
+    // ─────────────────────────────────────────────────────────────────────────
+    // Server list
+    // ─────────────────────────────────────────────────────────────────────────
     async getServers(): Promise<MCSSServer[]> {
         try {
             const data = await this.fetchApi('/api/client');
@@ -159,14 +139,13 @@ export class PterodactylService {
                 const attr = item?.attributes || item?.data?.attributes || item || {};
                 const identifier = attr.identifier || attr.uuid || item.id || '';
 
-                let statusCode = 0; // Default to offline if resource check fails or is pending
+                let statusCode = 0;
                 try {
                     const resData = await this.fetchApi(`/api/client/servers/${identifier}/resources`);
                     const resAttr = resData?.attributes || resData?.data?.attributes || resData?.data || resData || {};
-                    const state = resAttr.current_state || resAttr.state;
-                    statusCode = mapCurrentState(state);
+                    statusCode = mapCurrentState(resAttr.current_state || resAttr.state);
                 } catch {
-                    // Ignore resource check error for single server
+                    // ignore per-server resource error
                 }
 
                 return {
@@ -187,6 +166,9 @@ export class PterodactylService {
         }
     }
 
+    // ─────────────────────────────────────────────────────────────────────────
+    // Server stats
+    // ─────────────────────────────────────────────────────────────────────────
     async getServerStats(serverId: string): Promise<MCSSStats> {
         try {
             const data = await this.fetchApi(`/api/client/servers/${serverId}/resources`);
@@ -213,6 +195,8 @@ export class PterodactylService {
             let maxPlayers = 0;
             let isMcOnline = false;
 
+            // MC status: only call Netlify function if the panel server is running.
+            // This is the only remaining Netlify function call (player count via SLP).
             if (status === 1) {
                 try {
                     const mcResponse = await fetch('/.netlify/functions/pterodactyl-mcstatus', {
@@ -234,7 +218,7 @@ export class PterodactylService {
             }
 
             return {
-                cpuUsage: cpuUsage,
+                cpuUsage,
                 ramUsage: memoryMb > 0 ? Math.min(100, Math.round((memoryMb / 4096) * 100)) : 0,
                 onlinePlayers,
                 maxPlayers,
@@ -250,19 +234,17 @@ export class PterodactylService {
         }
     }
 
+    // ─────────────────────────────────────────────────────────────────────────
+    // Power actions
+    // ─────────────────────────────────────────────────────────────────────────
     async executeAction(serverId: string, action: string | number): Promise<void> {
         const actionMap: { [key: string]: string } = {
-            'Stop': 'stop',
-            'Start': 'start',
-            'Kill': 'kill',
-            'Restart': 'restart',
-            '1': 'stop',
-            '2': 'start',
-            '3': 'kill',
-            '4': 'restart'
+            'Stop': 'stop', 'Start': 'start', 'Kill': 'kill', 'Restart': 'restart',
+            '1': 'stop', '2': 'start', '3': 'kill', '4': 'restart'
         };
-
-        const signal = typeof action === 'string' ? (actionMap[action] || action.toLowerCase()) : (actionMap[String(action)] || 'restart');
+        const signal = typeof action === 'string'
+            ? (actionMap[action] || action.toLowerCase())
+            : (actionMap[String(action)] || 'restart');
 
         return this.fetchApi(`/api/client/servers/${serverId}/power`, {
             method: 'POST',
@@ -270,8 +252,11 @@ export class PterodactylService {
         });
     }
 
+    // ─────────────────────────────────────────────────────────────────────────
+    // Console command
+    // ─────────────────────────────────────────────────────────────────────────
     async executeCommand(serverId: string, command: string): Promise<void> {
-        // Optimistically append command to logs so user sees it in terminal
+        // Optimistically append so user sees their command immediately
         const current = this.consoleLogsMap.get(serverId) || [];
         this.consoleLogsMap.set(serverId, [...current, `> [EXEC]: ${command}`].slice(-200));
 
@@ -281,11 +266,13 @@ export class PterodactylService {
         });
     }
 
-    /**
-     * Polls console logs via the Netlify Function pterodactyl-console,
-     * which opens the WebSocket server-side (no browser Mixed Content issues).
-     * Falls back to cached logs on error.
-     */
+    // ─────────────────────────────────────────────────────────────────────────
+    // Console logs – persistent WebSocket (web) or Netlify poll (native)
+    //
+    // Web: opens ONE WebSocket per server and keeps it alive.
+    //      getConsole() just returns the local cache — zero extra network calls.
+    // Native: no browser WS available, falls back to the Netlify function poll.
+    // ─────────────────────────────────────────────────────────────────────────
     async getConsole(serverId: string, amountOfLines: number = 50): Promise<string[]> {
         if (!this.consoleLogsMap.has(serverId)) {
             this.consoleLogsMap.set(serverId, [
@@ -298,79 +285,171 @@ export class PterodactylService {
             window.location.protocol === 'static-rocket:' ||
             window.location.protocol === 'capacitor:';
 
-        // Throttle: only poll every 1.5 seconds max. Safe because the WS token
-        // is cached (no rate-limited Panel call on most polls) and each call now
-        // returns as soon as output stops flowing, not after a fixed wait.
-        const lastPoll = this.lastPolledAt.get(serverId) || 0;
-        if (Date.now() - lastPoll < 1500) {
-            return (this.consoleLogsMap.get(serverId) || []).slice(-amountOfLines);
-        }
-        this.lastPolledAt.set(serverId, Date.now());
-
-        const cleanKey = this.apiKey.replace(/^Bearer\s+/i, '');
-
         if (!isNative) {
-            // Web: use the Netlify Function to open WebSocket server-side
+            // Fire-and-forget: ensures the WebSocket is open, caches logs
+            this.ensureBrowserWebSocket(serverId);
+        } else {
+            // Native fallback: use Netlify function (no browser WS available)
+            await this.pollConsoleViaNativeProxy(serverId);
+        }
+
+        return (this.consoleLogsMap.get(serverId) || []).slice(-amountOfLines);
+    }
+
+    /**
+     * Opens a persistent WebSocket to the Wings server for the given server ID.
+     * If the socket is already CONNECTING or OPEN, this is a no-op.
+     * Tokens are cached for ~14 minutes to avoid hammering the REST API.
+     */
+    private async ensureBrowserWebSocket(serverId: string): Promise<void> {
+        const existing = this.wsConnections.get(serverId);
+        if (existing && (existing.readyState === WebSocket.CONNECTING || existing.readyState === WebSocket.OPEN)) {
+            return; // already alive
+        }
+
+        // Resolve WS credentials (token + socket URL)
+        let wsToken: string;
+        let wsSocket: string;
+
+        const cached = this.wsTokenCache.get(serverId);
+        if (cached && Date.now() < cached.expiresAt) {
+            wsToken = cached.token;
+            wsSocket = cached.socket;
+        } else {
             try {
-                const cached = this.wsCredsCache.get(serverId);
-                const headers: Record<string, string> = {
-                    'pterodactyl-base-url': this.baseUrl,
-                    'pterodactyl-api-key': cleanKey,
-                    'pterodactyl-server-id': serverId,
-                };
-                if (cached) {
-                    headers['pterodactyl-ws-token'] = cached.token;
-                    headers['pterodactyl-ws-socket'] = cached.socket;
-                }
-
-                const response = await fetch('/.netlify/functions/pterodactyl-console', {
-                    method: 'GET',
-                    headers,
+                const wsData = await this.getWebsocketToken(serverId);
+                wsToken = wsData.token;
+                wsSocket = wsData.socket;
+                // Pterodactyl tokens expire in ~15 min — refresh 1 min early
+                this.wsTokenCache.set(serverId, {
+                    token: wsToken,
+                    socket: wsSocket,
+                    expiresAt: Date.now() + 14 * 60 * 1000,
                 });
-
-                if (response.ok) {
-                    const data = await response.json();
-
-                    // Cache the credentials for the next poll, unless the function
-                    // told us the cached ones had expired (needsRefresh) — in that
-                    // case drop the cache so the very next poll fetches a fresh token.
-                    if (data?.needsRefresh) {
-                        this.wsCredsCache.delete(serverId);
-                    } else if (data?.wsToken && data?.wsSocket) {
-                        this.wsCredsCache.set(serverId, { token: data.wsToken, socket: data.wsSocket });
-                    }
-
-                    const newLogs: string[] = data?.logs || [];
-                    if (newLogs.length > 0) {
-                        const existing = this.consoleLogsMap.get(serverId) || [];
-                        const merged = [
-                            ...existing.filter(l => l.startsWith('> [EXEC]:')),
-                            ...newLogs
-                        ].slice(-200);
-                        this.consoleLogsMap.set(serverId, merged);
-                    }
-                } else {
-                    console.error('[PTERODACTYL CONSOLE] Function returned HTTP', response.status);
-                    const text = await response.text().catch(() => '');
-                    console.error('[PTERODACTYL CONSOLE] Body:', text.substring(0, 300));
-                }
-            } catch (e: any) {
-                if (!SILENT_ERRORS) {
-                    console.warn('[PTERODACTYL] Console poll failed:', e.message || e);
-                }
+            } catch (err: any) {
+                if (!SILENT_ERRORS) console.warn('[PTERODACTYL WS] Could not get token:', err.message);
+                return;
             }
         }
 
-        const logs = this.consoleLogsMap.get(serverId) || [];
-        return logs.slice(-amountOfLines);
+        if (!wsToken || !wsSocket) return;
+
+        const ws = new WebSocket(wsSocket);
+        this.wsConnections.set(serverId, ws);
+
+        ws.onopen = () => {
+            ws.send(JSON.stringify({ event: 'auth', args: [wsToken] }));
+        };
+
+        ws.onmessage = (event) => {
+            try {
+                const msg = JSON.parse(event.data);
+
+                if (msg.event === 'auth success') {
+                    ws.send(JSON.stringify({ event: 'send logs', args: [] }));
+                } else if (msg.event === 'console output') {
+                    const rawLog = msg.args?.[0] || '';
+                    const clean = rawLog.replace(/\x1B\[[0-9;]*[a-zA-Z]/g, '').trimEnd();
+                    if (clean) {
+                        const existing = this.consoleLogsMap.get(serverId) || [];
+                        // Remove the initial "connecting..." placeholder on first real log
+                        const filtered = existing.filter(l => !l.startsWith('[Pterodactyl Console:'));
+                        this.consoleLogsMap.set(serverId, [...filtered, clean].slice(-200));
+                    }
+                } else if (msg.event === 'token expiring' || msg.event === 'token expired') {
+                    // Invalidate cache so the next ensureBrowserWebSocket() fetches a fresh token
+                    this.wsTokenCache.delete(serverId);
+                    ws.close();
+                }
+            } catch {
+                // ignore malformed frames
+            }
+        };
+
+        ws.onerror = () => {
+            this.wsConnections.delete(serverId);
+        };
+
+        ws.onclose = () => {
+            this.wsConnections.delete(serverId);
+        };
     }
 
+    /**
+     * Native-only fallback: poll logs via the Netlify function.
+     * Throttled to 1 call per 5 seconds.
+     */
+    private lastNativePoll = new Map<string, number>();
+    private nativeWsCredsCache = new Map<string, { token: string; socket: string }>();
+
+    private async pollConsoleViaNativeProxy(serverId: string): Promise<void> {
+        const lastPoll = this.lastNativePoll.get(serverId) || 0;
+        if (Date.now() - lastPoll < 5000) return;
+        this.lastNativePoll.set(serverId, Date.now());
+
+        const cleanKey = this.apiKey.replace(/^Bearer\s+/i, '');
+
+        try {
+            const cached = this.nativeWsCredsCache.get(serverId);
+            const headers: Record<string, string> = {
+                'pterodactyl-base-url': this.baseUrl,
+                'pterodactyl-api-key': cleanKey,
+                'pterodactyl-server-id': serverId,
+            };
+            if (cached) {
+                headers['pterodactyl-ws-token'] = cached.token;
+                headers['pterodactyl-ws-socket'] = cached.socket;
+            }
+
+            const response = await fetch('/.netlify/functions/pterodactyl-console', {
+                method: 'GET',
+                headers,
+            });
+
+            if (response.ok) {
+                const data = await response.json();
+                if (data?.needsRefresh) {
+                    this.nativeWsCredsCache.delete(serverId);
+                } else if (data?.wsToken && data?.wsSocket) {
+                    this.nativeWsCredsCache.set(serverId, { token: data.wsToken, socket: data.wsSocket });
+                }
+                const newLogs: string[] = data?.logs || [];
+                if (newLogs.length > 0) {
+                    const existing = this.consoleLogsMap.get(serverId) || [];
+                    const merged = [
+                        ...existing.filter(l => l.startsWith('> [EXEC]:')),
+                        ...newLogs
+                    ].slice(-200);
+                    this.consoleLogsMap.set(serverId, merged);
+                }
+            }
+        } catch (e: any) {
+            if (!SILENT_ERRORS) {
+                console.warn('[PTERODACTYL] Native console poll failed:', e.message || e);
+            }
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // WebSocket token REST endpoint
+    // ─────────────────────────────────────────────────────────────────────────
     async getWebsocketToken(serverId: string): Promise<PterodactylWebsocketData> {
         const data = await this.fetchApi(`/api/client/servers/${serverId}/websocket`);
-        const attr = data?.attributes || data?.data?.attributes || {};
+        const attr = data?.attributes || data?.data?.attributes || data?.data || {};
         return {
             token: attr.token || '',
             socket: attr.socket || ''
         };
+    }
+
+    /**
+     * Cleanly close all open WebSocket connections (call this on logout/unmount).
+     */
+    closeAllWebSockets(): void {
+        for (const [, ws] of this.wsConnections) {
+            try { ws.close(); } catch { }
+        }
+        this.wsConnections.clear();
+        this.wsTokenCache.clear();
     }
 }

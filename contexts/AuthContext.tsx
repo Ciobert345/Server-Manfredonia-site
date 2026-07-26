@@ -292,7 +292,20 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             throw err;
         }
     };
-    const logout = async () => { setLoading(true); try { await supabase.auth.signOut(); setUser(null); setMcssKey(null); } finally { setLoading(false); } };
+    const logout = async () => {
+        setLoading(true);
+        try {
+            // Close any open Pterodactyl WebSocket connections before clearing the service
+            if (mcssService && 'closeAllWebSockets' in mcssService) {
+                (mcssService as any).closeAllWebSockets();
+            }
+            await supabase.auth.signOut();
+            setUser(null);
+            setMcssKey(null);
+        } finally {
+            setLoading(false);
+        }
+    };
     const updateProfile = async (u: any) => { if (!user) return; await supabase.from('profiles').update(u).eq('id', user.id); setUser({ ...user, ...u }); };
     const updatePassword = async (p: string) => {
         const { error } = await supabase.auth.updateUser({ password: p });
