@@ -38,7 +38,6 @@ const LiveTerminal: React.FC<LiveTerminalProps> = ({ serverOnline = false }) => 
         if (!mcssService || !serverId) return;
 
         const pollLogs = async () => {
-            if (!serverOnline) return; // Skip polling if server is known to be offline
             try {
                 const newLogs = await mcssService.getConsole(serverId, 100);
                 setLogs(newLogs);
@@ -48,15 +47,13 @@ const LiveTerminal: React.FC<LiveTerminalProps> = ({ serverOnline = false }) => 
             }
         };
 
-        if (serverOnline) pollLogs();
+        pollLogs();
 
-        // Poll at 1s — this just reads from the in-memory cache populated by the
-        // persistent WebSocket; no network calls happen here.
         const interval = setInterval(() => {
             if (!document.hidden) pollLogs();
         }, 1000);
         return () => clearInterval(interval);
-    }, [mcssService, serverId, serverOnline]);
+    }, [mcssService, serverId]);
 
     useEffect(() => {
         if (scrollRef.current) {
