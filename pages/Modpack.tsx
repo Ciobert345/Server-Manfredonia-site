@@ -239,7 +239,7 @@ const Modpack: React.FC = () => {
                 {installTab === 'sklauncher' && [
                   { step: '01', title: 'Prepare', desc: 'Download SKLauncher and run it.', link: 'https://skmedix.pl/' },
                   { step: '02', title: 'Extract', desc: 'Extract the contents of the Modpack .zip directly into your .minecraft folder (replace existing files).' },
-                  { step: '03', title: 'Configure', desc: 'Launch with "neoforge-1.21.1 with NeoForge 21.1.235" and allocate 6-8GB RAM.' }
+                  { step: '03', title: 'Configure', desc: 'Launch with "NeoForge 1.21.1 with NeoForge 21.1.235" and allocate 6-8GB RAM.' }
                 ].map(item => (
                   <div key={item.step} className="flex flex-col gap-3">
                     <span className="text-5xl font-black text-white/5 tracking-tighter">{item.step}</span>
